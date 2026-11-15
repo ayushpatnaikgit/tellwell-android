@@ -45,8 +45,9 @@ Using TellWell:
 - The microphone is on only while TellWell is open and listening (at most two minutes at a time). Audio stays in
   memory and is discarded; nothing is saved or logged.
 - TellWell refuses to listen in password fields.
-- The internet permission is used for one thing: downloading the two models from pinned Hugging Face versions over
-  HTTPS. Each file is kept only if its SHA-256 matches. All network code is in
+- The internet permission is used for one thing: downloading the two models over HTTPS from
+  [tellwell-models](https://github.com/ayushpatnaikgit/tellwell-models) (copies of pinned Hugging Face versions, which
+  are the fallback). Each file is kept only if its SHA-256 matches. All network code is in
   [`ModelDownloader.kt`](app/src/main/java/io/github/ayushpatnaikgit/tellwell/ModelDownloader.kt).
 - No analytics, no crash reporting, no accounts.
 
