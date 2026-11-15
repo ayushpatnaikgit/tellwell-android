@@ -41,6 +41,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Test builds signed with the release key install over the released app without wiping its models.
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+        }
         release {
             // No code shrinking: the native libraries call into these classes by name.
             isMinifyEnabled = false

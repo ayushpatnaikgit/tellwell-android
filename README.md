@@ -68,11 +68,12 @@ Only the Motorola Edge 70 has been tested so far. Reports from other phones are 
 
 | Step | Model | Runs with |
 |---|---|---|
-| Speech to text | [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), int8 ([sherpa-onnx export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8)) | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and ONNX Runtime, CPU |
+| Speech to text | [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) (English), int8 ([sherpa-onnx export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8)) | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and ONNX Runtime, CPU |
 | Cleanup | [S1-mini FreeFlow Cleanup, Q4_0 GGUF](https://huggingface.co/ayushpatnaik/S1-mini-FreeFlow-cleanup-GGUF), a fine-tune of S1-mini by Superwhisper | [llama.cpp](https://github.com/ggml-org/llama.cpp): NPU, GPU or CPU |
 
 The cleanup instructions stay cached in the model's memory between dictations, so each dictation only processes
-your words.
+your words. On the CPU, cleanup also uses copy-ahead decoding: it guesses the next few words by copying them from
+the transcript and checks them in one pass, which gives the same text about 20% faster.
 
 ## Building
 

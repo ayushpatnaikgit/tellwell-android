@@ -15,15 +15,17 @@ import javax.net.ssl.HttpsURLConnection
 object ModelDownloader {
     data class Model(val url: String, val path: String, val size: Long, val sha256: String)
 
-    private const val ASR = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/ed5d745623472f97cfc2e6c2916ee248798fc5a8"
+    // NVIDIA Parakeet TDT 0.6B v2 (English), int8, exported for sherpa-onnx. Beat the multilingual v3 on English in
+    // our tests (hard terms 29 vs 22 of 120; 2.05% vs 2.91% word errors on ordinary sentences).
+    private const val ASR = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/84b478d541cdbf0c296a7ab5f1e20a6f8f998114"
     private const val LLM = "https://huggingface.co/ayushpatnaik/S1-mini-FreeFlow-cleanup-GGUF/resolve/6665acc599d42d7adc2d55c577119e56ee22810d"
 
     val MODELS = listOf(
-        Model("$ASR/tokens.txt", "asr/tokens.txt", 93_939, "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"),
-        Model("$ASR/decoder.int8.onnx", "asr/decoder.int8.onnx", 11_845_274, "0222a86147299d4dee90edf95b6d13827edb42ad8b7c9cf0b2582f030937c0b5"),
-        Model("$ASR/joiner.int8.onnx", "asr/joiner.int8.onnx", 6_355_277, "cbd02f3696e9944970111fb439d9c3fd365a80374565f13f2b9c7007d253fc98"),
+        Model("$ASR/tokens.txt", "asr-v2/tokens.txt", 9_384, "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d"),
+        Model("$ASR/decoder.int8.onnx", "asr-v2/decoder.int8.onnx", 7_257_753, "4d097bae3bac5c96018d5293ba39f1b657296102b142affda40378f38b020f41"),
+        Model("$ASR/joiner.int8.onnx", "asr-v2/joiner.int8.onnx", 1_739_080, "77a29f3e5ac7d37074e0af465391b80f314015d5b97f0f90c6c7767f1d56f428"),
         Model("$LLM/s1-mini-freeflow-cleanup-q4_0.gguf", "s1-mini-freeflow-cleanup-q4_0.gguf", 381_565_696, "ff7dfbc19d7220ac7e1f7cd88bc95da3db7e7e7893a35ea552895727605abddc"),
-        Model("$ASR/encoder.int8.onnx", "asr/encoder.int8.onnx", 652_282_294, "1afbe69c1ffdabee94755f42e4daf1d93549131a3da11356bda84fcef0f2c479"),
+        Model("$ASR/encoder.int8.onnx", "asr-v2/encoder.int8.onnx", 652_282_309, "92a10bd9c23936ea0566c29f963bc57c2a5df4261b6a8921c39abea66557ca8b"),
     )
     val TOTAL = MODELS.sumOf { it.size }
 
