@@ -1,17 +1,32 @@
-# TellWell for Android
+<p align="center">
+  <img src="docs/icon.png" width="128" height="128" alt="TellWell icon">
+</p>
 
-**Free, private voice typing that runs entirely on your phone.**
+<h1 align="center">TellWell for Android</h1>
+
+<p align="center">
+  Free, private voice typing that runs entirely on your phone.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ayushpatnaikgit/tellwell-android/releases/latest/download/TellWell.apk"><img src="https://img.shields.io/badge/Download_for_Android-0b8a87?style=for-the-badge&logo=android&logoColor=white" height="56" alt="Download TellWell for Android"></a>
+</p>
+
+<p align="center">
+  <a href="https://ayushpatnaikgit.github.io/tellwell/android/">Website</a> ·
+  <a href="https://github.com/ayushpatnaikgit/tellwell">TellWell for Mac</a>
+</p>
 
 TellWell is a voice keyboard that works alongside the keyboard you already use. Type as usual; when you'd rather
 talk, tap the globe key. TellWell starts listening at once. Tap when you're done: it types what you meant, without
 the "um"s, repeated words and false starts, and hands you straight back to your keyboard.
 
-It is the Android companion to [TellWell for Mac](https://github.com/ayushpatnaikgit/tellwell).
+TellWell is free. If it helps you, a star on GitHub helps other people find it.
 
 ## Install
 
-1. Download `TellWell-<version>.apk` from the [latest release](https://github.com/ayushpatnaikgit/tellwell-android/releases/latest)
-   on your phone and open it. Android asks you to allow installs from your browser or file manager the first time.
+1. On your phone, tap **Download for Android** above (or get the APK from the
+   [latest release](https://github.com/ayushpatnaikgit/tellwell-android/releases/latest)) and open it. Android asks you to allow installs from your browser or file manager the first time.
 2. Open TellWell and follow the three setup steps:
    - **Download the models** (about 1 GB, once; use Wi-Fi). The download keeps going if you lock the phone.
    - **Allow the microphone.**
