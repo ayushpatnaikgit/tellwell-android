@@ -31,7 +31,7 @@ class Recorder(private val onLevel: (Float) -> Unit) {
         running = true
         rec.startRecording()
         reader = thread(name = "tellwell-mic") {
-            val buf = FloatArray(1600)
+            val buf = FloatArray(800) // 50 ms: the bars follow the voice closely
             while (running) {
                 val n = rec.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
                 if (n > 0) {

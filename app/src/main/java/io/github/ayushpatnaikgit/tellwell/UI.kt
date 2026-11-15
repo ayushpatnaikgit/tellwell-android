@@ -95,7 +95,14 @@ class MarkView(context: Context, private val p: Palette) : View(context) {
             field = v; modeStart = SystemClock.uptimeMillis(); invalidate()
         }
 
-    fun setLevel(rms: Float) { level = ((rms - 0.004f) * 10f).coerceIn(0f, 1f) }
+    /**
+     * Microphone loudness (RMS, 0..1) to bar height. Uses decibels like the ear does: -55 dB (room noise) is still,
+     * -20 dB (close, loud speech) is full height, so ordinary talking clearly moves the bars.
+     */
+    fun setLevel(rms: Float) {
+        val db = 20f * kotlin.math.log10(rms.coerceAtLeast(1e-6f))
+        level = ((db + 55f) / 35f).coerceIn(0f, 1f)
+    }
 
     private fun noise(k: Int, t: Float) =
         0.5f + 0.5f * sin(t * 9.1f + k * 1.7f) * sin(t * 4.3f + k * 0.6f + sin(t * 2f + k))
@@ -113,7 +120,8 @@ class MarkView(context: Context, private val p: Palette) : View(context) {
             Mode.IDLE -> { mt.copyInto(curT); mh.copyInto(curH); curAngle = 0f }
             Mode.LISTENING -> {
                 val e = outC((t / 0.45f).coerceIn(0f, 1f))
-                val amp = 0.2f + 0.8f * smooth
+                // Nearly still in silence, tall when someone speaks: the bars show that TellWell hears you.
+                val amp = 0.06f + 0.94f * smooth
                 for (k in 0 until 7) {
                     val dance = 40f + 170f * noise(k + 3, g) * amp
                     curH[k] = lerp(fromH[k], dance, e)

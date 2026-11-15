@@ -190,7 +190,14 @@ class MainActivity : Activity() {
         setContentView(scroll)
         watchDownload()
 
-        if (BuildConfig.DEBUG) intent.getStringExtra("selftest")?.let { selfTest(it) }
+        if (BuildConfig.DEBUG) {
+            if (intent.hasExtra("draft")) {
+                Engine.draftK = intent.getIntExtra("draft", 0)
+                Engine.draftOverridden = true
+            }
+            intent.getStringExtra("devices")?.let { Engine.devices = it.split(",") }
+            intent.getStringExtra("selftest")?.let { selfTest(it) }
+        }
         if (BuildConfig.DEBUG && intent.getBooleanExtra("download", false)) startDownload()
     }
 
@@ -275,7 +282,7 @@ class MainActivity : Activity() {
             val t0 = System.nanoTime()
             Engine.process(samples) { r ->
                 val total = (System.nanoTime() - t0) / 1_000_000
-                Log.i("TellWellSelfTest", "audio=${samples.size / 16}ms asr=${r.asrMs}ms cleanup=${r.cleanupMs}ms total=${total}ms")
+                Log.i("TellWellSelfTest", "draft=${Engine.draftK} audio=${samples.size / 16}ms asr=${r.asrMs}ms cleanup=${r.cleanupMs}ms total=${total}ms")
                 Log.i("TellWellSelfTest", "raw: ${r.raw}")
                 Log.i("TellWellSelfTest", "out: ${r.text}")
             }

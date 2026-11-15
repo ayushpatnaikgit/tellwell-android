@@ -12,7 +12,7 @@ import java.util.concurrent.Executors
 /** llama.cpp bridge (see cpp/tellwell_llm.cpp). */
 object LlmNative {
     external fun load(libDir: String, modelPath: String, prefix: String, devices: String, threads: Int): String
-    external fun complete(suffix: String, maxTokens: Int): String
+    external fun complete(suffix: String, maxTokens: Int, draftK: Int): String
     external fun device(): String
 }
 
@@ -32,7 +32,19 @@ object Engine {
     @Volatile private var cleanupOn = false
 
     fun modelsDir(context: Context) = File(context.filesDir, "models")
-    private fun asrDir(context: Context) = File(modelsDir(context), "asr")
+    private fun asrDir(context: Context) = File(modelsDir(context), "asr-v2")
+
+    /** Copy-ahead draft length for cleanup (0 = plain greedy). Same text either way, only faster. */
+    @Volatile var draftK = 4
+    @Volatile var draftOverridden = false
+
+    /** Backends to try for cleanup, fastest first. Debug builds can override it to test one path. */
+    @Volatile var devices = listOf("HTP0", "GPUOpenCL", "CPU")
+
+    /** Speech model folders from earlier versions (0.1.0 used multilingual v3 in models/asr). */
+    fun removeOldModels(context: Context) {
+        File(modelsDir(context), "asr").takeIf { it.isDirectory }?.deleteRecursively()
+    }
     private fun llmFile(context: Context) = File(modelsDir(context), "s1-mini-freeflow-cleanup-q4_0.gguf")
 
     fun modelsPresent(context: Context): Boolean =
@@ -54,6 +66,7 @@ object Engine {
             return
         }
         status = "Loading"
+        removeOldModels(context)
         // Speech recognition first. It runs on the CPU (with ONNX Runtime picking instructions at runtime),
         // so it works on any arm64 phone; without it there is nothing to type.
         try {
@@ -84,7 +97,7 @@ object Engine {
             System.loadLibrary("tellwell_llm")
             // Fastest first: the NPU, then the GPU, then the CPU. Each must pass a quick correctness check,
             // since a backend can run but compute wrong results on a chip it doesn't fully support.
-            for (d in listOf("HTP0", "GPUOpenCL", "CPU")) {
+            for (d in devices) {
                 val got = LlmNative.load(context.applicationInfo.nativeLibraryDir, llmFile(context).absolutePath, Prompt.PREFIX, d, 4)
                 if (got.isNotEmpty() && canaryPasses()) { device = got; break }
             }
@@ -92,6 +105,9 @@ object Engine {
             android.util.Log.w("TellWellLLM", "cleanup unavailable: ${t.javaClass.simpleName}")
         }
         cleanupOn = device.isNotEmpty()
+        // Copy-ahead decoding checks several tokens per pass. Measured on a Snapdragon 7 Gen 4: 20% faster on the CPU,
+        // but slower on the NPU and GPU, whose small-batch passes cost more than they save. Debug runs can override.
+        if (!draftOverridden) draftK = if (device == "CPU") 4 else 0
         ready = true
         status = if (cleanupOn) "Ready (cleanup on ${when (device) { "HTP0" -> "the NPU"; "GPUOpenCL" -> "the GPU"; else -> "the CPU" }})"
             else "Ready (speech only: cleanup isn't available on this phone)"
@@ -121,7 +137,7 @@ object Engine {
 
     /** A fixed, invented dictation whose cleanup is known. Garbage output means this backend can't be trusted. */
     private fun canaryPasses(): Boolean {
-        val out = LlmNative.complete(Prompt.suffix("um so lets meet at five no wait six on thursday"), 40)
+        val out = LlmNative.complete(Prompt.suffix("um so lets meet at five no wait six on thursday"), 40, 0)
         val ok = out.contains("Thursday") && (out.contains("6") || out.contains("six", ignoreCase = true)) &&
             !out.contains("five", ignoreCase = true) && out.all { it.code < 0x250 }
         android.util.Log.i("TellWellLLM", "self-check on ${LlmNative.device()}: ${if (ok) "passed" else "failed"}")
@@ -129,7 +145,7 @@ object Engine {
     }
 
     private fun cleanup(raw: String): String {
-        val out = LlmNative.complete(Prompt.suffix(raw), 160).trim()
+        val out = LlmNative.complete(Prompt.suffix(raw), 160, draftK).trim()
         if (out == "EMPTY") return ""
         // Guard: a cleanup should never be empty for real speech or much longer than what was said.
         val rawWords = raw.split(Regex("\\s+")).size
