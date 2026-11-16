@@ -186,7 +186,7 @@ class MainActivity : Activity() {
         status = text("", 13.5f, 500, p.muted, center = true)
         col.addView(status, wide)
         gap(6)
-        col.addView(text("What you say never leaves this phone. The internet is only used once, to download the models from Hugging Face.", 13.5f, 400, p.faint, center = true), wide)
+        col.addView(text("What you say never leaves this phone. The internet is only used once, to download the models from GitHub.", 13.5f, 400, p.faint, center = true), wide)
         setContentView(scroll)
         watchDownload()
 
@@ -226,12 +226,27 @@ class MainActivity : Activity() {
         micStep.setDone(mic)
         kbdStep.setDone(enabled)
         val have = Engine.modelsPresent(this)
-        modelStep.setDone(have)
-        if (!ModelDownloader.running && !have) modelStep.bodyView.text = downloadNote ?: "About 1 GB, once. Use Wi-Fi."
-        if (have && !ModelDownloader.running) modelStep.bodyView.text = "Downloaded and verified."
+        val missingMb = ModelDownloader.missing(this).sumOf { it.size } / 1_000_000
+        // A phone already dictating on the CPU can download the faster NPU encoder.
+        val upgrade = have && missingMb > 0 && Npu.candidate(this)
+        modelStep.setDone(have && !upgrade)
+        if (!ModelDownloader.running) modelStep.bodyView.text = when {
+            !have -> downloadNote ?: "About ${(missingMb + 50) / 100 * 100} MB, once. Use Wi-Fi."
+            upgrade -> downloadNote ?: "Faster speech for this phone's NPU: about $missingMb MB more, once."
+            else -> "Downloaded and verified."
+        }
         status.text = if (have) Engine.status else "Models not downloaded yet"
         status.setTextColor(if (Engine.ready) p.accent else p.muted)
+        // While loading (or compiling for the NPU, about a minute), keep the status line current, and keep the screen on:
+        // the compile needs a lot of memory, and Android stops a visible app last.
+        if (have && !Engine.ready) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (have && !Engine.ready && !polling) {
+            polling = true
+            main.postDelayed({ polling = false; if (!isDestroyed) refresh() }, 2000)
+        }
     }
+    private var polling = false
 
     private var downloadNote: String? = null
 

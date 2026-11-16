@@ -9,6 +9,14 @@ import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import java.io.File
 import java.util.concurrent.Executors
 
+/** Speech recognition on the Qualcomm NPU (see cpp/tellwell_asr.cpp). */
+object AsrNpu {
+    /** "" when ready, else why not (no user content). */
+    external fun load(libDir: String, ctxPath: String, modelPath: String, decoder: String, joiner: String, tokens: String): String
+    /** The transcript, or null if the NPU failed. */
+    external fun transcribe(samples: FloatArray): String?
+}
+
 /** llama.cpp bridge (see cpp/tellwell_llm.cpp). */
 object LlmNative {
     external fun load(libDir: String, modelPath: String, prefix: String, devices: String, threads: Int): String
@@ -29,6 +37,9 @@ object Engine {
     @Volatile var status = "Not loaded"
         private set
     private var asr: OfflineRecognizer? = null
+    /** Speech recognition runs on the NPU (else on the CPU with sherpa-onnx). */
+    @Volatile var asrOnNpu = false
+        private set
     @Volatile private var cleanupOn = false
 
     fun modelsDir(context: Context) = File(context.filesDir, "models")
@@ -47,9 +58,65 @@ object Engine {
     }
     private fun llmFile(context: Context) = File(modelsDir(context), "s1-mini-freeflow-cleanup-q4_0.gguf")
 
+    private fun cpuEncoder(context: Context) = File(asrDir(context), "encoder.int8.onnx")
+
+    /** Enough to dictate: decoder, joiner, tokens and cleanup, plus a speech encoder for the NPU or the CPU. */
     fun modelsPresent(context: Context): Boolean =
-        listOf("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt").all { File(asrDir(context), it).isFile } &&
-            llmFile(context).isFile
+        listOf("decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt").all { File(asrDir(context), it).isFile } &&
+            llmFile(context).isFile &&
+            (cpuEncoder(context).isFile || (Npu.candidate(context) && (Npu.compiled(context) || Npu.downloaded(context))))
+
+    /**
+     * After the NPU encoder is downloaded on a phone already dictating on the CPU: compile it and switch to it.
+     * [done] runs on the worker thread.
+     */
+    fun upgradeToNpu(context: Context, done: () -> Unit = {}) {
+        val app = context.applicationContext
+        worker.execute {
+            if (ready && !asrOnNpu && tryNpu(app)) {
+                asr?.release()
+                asr = null
+                status = status.replace("speech on the CPU", "speech on the NPU")
+            }
+            done()
+        }
+    }
+
+    /**
+     * Loads the NPU encoder, compiling it for this phone first if needed (a few minutes, once), and checks it on a
+     * second of silence. On failure, remembers it and falls back to the CPU. Runs on the worker thread.
+     */
+    private fun tryNpu(context: Context): Boolean {
+        if (!Npu.candidate(context) || !(Npu.compiled(context) || Npu.downloaded(context))) return false
+        val compile = !Npu.compiled(context)
+        if (compile) {
+            if (!Npu.beginCompile(context)) return false
+            status = "Getting ready for this phone's NPU: keep TellWell open for about a minute (once)"
+            Npu.compiling(context).apply { deleteRecursively(); mkdirs() }
+        }
+        val ctx = if (compile) java.io.File(Npu.compiling(context), "enc-ctx.onnx") else Npu.ctx(context)
+        var err: String
+        try {
+            Os.setenv("ADSP_LIBRARY_PATH", context.applicationInfo.nativeLibraryDir, true)
+            System.loadLibrary("tellwell_asr")
+            val dir = asrDir(context).absolutePath
+            err = AsrNpu.load(context.applicationInfo.nativeLibraryDir, ctx.absolutePath, Npu.model(context).absolutePath,
+                "$dir/decoder.int8.onnx", "$dir/joiner.int8.onnx", "$dir/tokens.txt")
+            if (err.isEmpty() && compile && !Npu.finishCompile(context)) err = "could not save the compiled model"
+            if (err.isEmpty() && AsrNpu.transcribe(FloatArray(16000)) == null) err = "self-check failed"
+        } catch (t: Throwable) {
+            err = t.javaClass.simpleName
+        }
+        if (err.isNotEmpty()) {
+            android.util.Log.w("TellWellASR", "NPU speech unavailable: $err")
+            Npu.markFailed(context)
+            return false
+        }
+        asrOnNpu = true
+        // The CPU encoder (650 MB) isn't needed any more; it is downloaded again only if the NPU ever fails.
+        cpuEncoder(context).delete()
+        return true
+    }
 
     /** Loads both models on the worker thread if needed; [done] runs on the worker thread. */
     fun ensureLoaded(context: Context, done: (String) -> Unit = {}) {
@@ -67,9 +134,17 @@ object Engine {
         }
         status = "Loading"
         removeOldModels(context)
-        // Speech recognition first. It runs on the CPU (with ONNX Runtime picking instructions at runtime),
-        // so it works on any arm64 phone; without it there is nothing to type.
-        try {
+        // Speech recognition first: on the NPU where there is one (about 8x faster), else on the CPU (with ONNX Runtime
+        // picking instructions at runtime), which works on any arm64 phone. Without it there is nothing to type.
+        if (!tryNpu(context)) {
+            if (!cpuEncoder(context).isFile) {
+                // The NPU didn't work here and this phone never downloaded the CPU encoder: setup offers it now.
+                status = "Models missing"
+                return
+            }
+            status = "Loading"
+        }
+        if (!asrOnNpu) try {
             val dir = asrDir(context).absolutePath
             asr = OfflineRecognizer(
                 config = OfflineRecognizerConfig(
@@ -109,8 +184,9 @@ object Engine {
         // but slower on the NPU and GPU, whose small-batch passes cost more than they save. Debug runs can override.
         if (!draftOverridden) draftK = if (device == "CPU") 4 else 0
         ready = true
-        status = if (cleanupOn) "Ready (cleanup on ${when (device) { "HTP0" -> "the NPU"; "GPUOpenCL" -> "the GPU"; else -> "the CPU" }})"
-            else "Ready (speech only: cleanup isn't available on this phone)"
+        val speechOn = if (asrOnNpu) "speech on the NPU" else "speech on the CPU"
+        status = if (cleanupOn) "Ready ($speechOn, cleanup on ${when (device) { "HTP0" -> "the NPU"; "GPUOpenCL" -> "the GPU"; else -> "the CPU" }})"
+            else "Ready ($speechOn; cleanup isn't available on this phone)"
     }
 
     /** Transcribes and cleans up 16 kHz mono audio. [done] runs on the worker thread. */
@@ -118,16 +194,18 @@ object Engine {
         worker.execute {
             val recognizer = asr
             // Runs after any load queued before it, so a clip recorded during loading is still processed.
-            if (!ready || recognizer == null || samples.size < 1600) {
+            if (!ready || (recognizer == null && !asrOnNpu) || samples.size < 1600) {
                 done(Result("", 0, 0, ""))
                 return@execute
             }
             val t0 = System.nanoTime()
-            val stream = recognizer.createStream()
-            stream.acceptWaveform(samples, 16000)
-            recognizer.decode(stream)
-            val raw = recognizer.getResult(stream).text.trim()
-            stream.release()
+            // The CPU recogniser isn't loaded when the NPU is used; a failed NPU run then types nothing.
+            val raw = ((if (asrOnNpu) AsrNpu.transcribe(samples) else null) ?: recognizer?.let { r ->
+                val stream = r.createStream()
+                stream.acceptWaveform(samples, 16000)
+                r.decode(stream)
+                r.getResult(stream).text.also { stream.release() }
+            } ?: "").trim()
             val t1 = System.nanoTime()
             val text = if (raw.isEmpty()) "" else if (cleanupOn) cleanup(raw) else raw
             val t2 = System.nanoTime()

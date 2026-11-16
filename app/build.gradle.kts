@@ -62,10 +62,22 @@ android {
     }
 
     // Native libraries are extracted to disk: the NPU loads its code (libggml-htp-*.so) from a real directory.
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            // Qualcomm's runtime: keep the NPU (HTP) libraries only, not the older DSP or the GPU backends.
+            excludes += listOf("**/libQnnDsp*.so", "**/libQnnGpu.so")
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    // Qualcomm AI Engine Direct runtime (QNN) for speech recognition on the NPU. Its licence allows distribution only
+    // inside an app, so it comes from Maven at build time and is never committed (see THIRD_PARTY_qnn-runtime_NOTICE.txt).
+    implementation("com.qualcomm.qti:qnn-runtime:2.42.0")
 }
