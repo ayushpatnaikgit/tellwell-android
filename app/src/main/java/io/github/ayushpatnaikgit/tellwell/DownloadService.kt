@@ -40,11 +40,27 @@ class DownloadService : Service() {
             val pct = (done * 100 / total).toInt()
             if (pct != lastPct) { lastPct = pct; nm.notify(1, note("Downloading models… $pct%", pct, true)) }
         }) { error ->
-            ModelDownloader.listener?.invoke(0, 0, error, true)
-            if (wake.isHeld) wake.release()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            nm.notify(2, note(error ?: "Models ready. TellWell no longer needs the internet.", 0, false))
-            stopSelf()
+            fun finish(text: String) {
+                if (wake.isHeld) wake.release()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                nm.notify(2, note(text, 0, false))
+                stopSelf()
+            }
+            if (error != null || !Npu.candidate(this) || Npu.compiled(this)) {
+                ModelDownloader.listener?.invoke(0, 0, error, true)
+                finish(error ?: "Models ready. TellWell no longer needs the internet.")
+            } else {
+                // Compile the NPU model for this phone now, while this task keeps the app running (about a minute, once).
+                nm.notify(1, Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_launcher_mono)
+                    .setContentTitle("TellWell").setContentText("Getting ready for this phone's NPU: keep TellWell open for about a minute…")
+                    .setOngoing(true).setProgress(0, 0, true).build())
+                ModelDownloader.listener?.invoke(0, 0, null, true)
+                val ready = { _: Any? ->
+                    ModelDownloader.listener?.invoke(0, 0, null, true)
+                    finish(if (Engine.asrOnNpu) "Ready. Speech runs on this phone's NPU." else "Models ready. TellWell no longer needs the internet.")
+                }
+                if (Engine.ready) Engine.upgradeToNpu(this) { ready(null) } else Engine.ensureLoaded(this) { ready(it) }
+            }
         }
         return START_NOT_STICKY
     }

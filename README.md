@@ -57,7 +57,13 @@ Using TellWell:
 - About 1.1 GB of free memory while TellWell is open. Phones with 6 GB of RAM or more are comfortable.
 - Speed: on a Motorola Edge 70 (Snapdragon 7 Gen 4), the text appears about one second after you tap.
 
-TellWell picks the fastest part of the phone that gives correct results, checking each with a known test sentence:
+Speech recognition runs on the NPU of Snapdragon phones (Android 12 or newer): about 0.15 s for a sentence, instead of
+about 0.5 s on the CPU. These phones download an NPU version of the speech model, and TellWell compiles it for the
+phone once after the download (about a minute; keep TellWell open). If that doesn't work on a phone, TellWell uses the
+CPU instead.
+
+For cleanup, TellWell picks the fastest part of the phone that gives correct results, checking each with a known test
+sentence:
 
 1. the NPU on recent Snapdragon chips (Hexagon v73 and newer),
 2. otherwise the GPU on Snapdragon (Adreno),
@@ -69,7 +75,7 @@ Only the Motorola Edge 70 has been tested so far. Reports from other phones are 
 
 | Step | Model | Runs with |
 |---|---|---|
-| Speech to text | [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) (English), int8 ([sherpa-onnx export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8)) | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and ONNX Runtime, CPU |
+| Speech to text | [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) (English): on Snapdragon, statically quantised for the NPU ([tellwell-models](https://github.com/ayushpatnaikgit/tellwell-models)); elsewhere int8 ([sherpa-onnx export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8)) | ONNX Runtime with Qualcomm's QNN runtime on the NPU; [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and ONNX Runtime on the CPU |
 | Cleanup | [S1-mini FreeFlow Cleanup, Q4_0 GGUF](https://huggingface.co/ayushpatnaik/S1-mini-FreeFlow-cleanup-GGUF), a fine-tune of S1-mini by Superwhisper | [llama.cpp](https://github.com/ggml-org/llama.cpp): NPU, GPU or CPU |
 
 The cleanup instructions stay cached in the model's memory between dictations, so each dictation only processes
@@ -105,7 +111,10 @@ The prebuilt native libraries in `app/src/main/jniLibs/arm64-v8a` are:
 ## Licence
 
 TellWell for Android is released under the [MIT licence](LICENSE). It includes llama.cpp (MIT), sherpa-onnx
-(Apache 2.0), ONNX Runtime (MIT), the Inter typeface (SIL Open Font License) and Material Design icons
-(Apache 2.0); their licences are in the `THIRD_PARTY_*` files. The models are downloaded, not bundled: Parakeet is
+(Apache 2.0), ONNX Runtime (MIT), kaldi-native-fbank (Apache 2.0), KISS FFT (BSD 3-Clause), the Inter typeface (SIL
+Open Font License) and Material Design icons (Apache 2.0); their licences are in the `THIRD_PARTY_*` files. The APK
+also includes Qualcomm's QNN runtime (`com.qualcomm.qti:qnn-runtime`, fetched from Maven Central when building), which
+is proprietary and licensed by Qualcomm for distribution only inside an app; it is not part of this repository and
+is not covered by the MIT licence. Its notices are in `THIRD_PARTY_qnn-runtime_NOTICE.txt`. The models are downloaded, not bundled: Parakeet is
 licensed CC BY 4.0 by NVIDIA, and S1-mini is by Superwhisper under Apache 2.0 with a naming clause (see its model
 card).
