@@ -50,4 +50,9 @@ object ModelStore {
     }
 
     const val CAN_PAUSE = true
+    /** The user starts the download (it's about 1 GB). */
+    const val AUTO_FETCH = false
+    const val STEP_TITLE = "Download the models"
+    fun missingNote(mb: Long) = "About ${(mb + 50) / 100 * 100} MB, once. Use Wi-Fi."
+    fun upgradeNote(mb: Long) = "Faster speech for this phone's NPU: about $mb MB more, once."
 }

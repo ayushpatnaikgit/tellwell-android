@@ -155,7 +155,7 @@ class MainActivity : Activity() {
 
         col.addView(text("Set up", 24f, 700, p.ink))
         gap(4)
-        modelStep = Step(1, "Download the models", "About 1 GB, once. Use Wi-Fi.", "Download") { startDownload() }
+        modelStep = Step(1, ModelStore.STEP_TITLE, ModelStore.missingNote(1000), "Download") { startDownload() }
         col.addView(modelStep.view)
         fun divider() = col.addView(View(this).apply { setBackgroundColor(p.line) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(1)))
         divider()
@@ -212,6 +212,8 @@ class MainActivity : Activity() {
         super.onResume()
         playIntro()
         refresh()
+        // Play build: ask Google Play for any missing model pack straight away (after a failure, the button retries).
+        if (ModelStore.AUTO_FETCH && downloadNote == null && !ModelStore.busy && ModelStore.missingBytes(this) > 0) startDownload()
         Engine.ensureLoaded(this) { main.post { refresh() } }
     }
 
@@ -231,8 +233,8 @@ class MainActivity : Activity() {
         val upgrade = have && missingMb > 0 && Npu.candidate(this)
         modelStep.setDone(have && !upgrade)
         if (!ModelStore.busy) modelStep.bodyView.text = when {
-            !have -> downloadNote ?: "About ${(missingMb + 50) / 100 * 100} MB, once. Use Wi-Fi."
-            upgrade -> downloadNote ?: "Faster speech for this phone's NPU: about $missingMb MB more, once."
+            !have -> downloadNote ?: ModelStore.missingNote(missingMb)
+            upgrade -> downloadNote ?: ModelStore.upgradeNote(missingMb)
             else -> "Downloaded and verified."
         }
         status.text = if (have) Engine.status else "Models not downloaded yet"

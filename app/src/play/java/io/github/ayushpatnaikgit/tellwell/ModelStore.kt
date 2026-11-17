@@ -63,6 +63,8 @@ object ModelStore {
     private val states = HashMap<String, AssetPackState>()
     private var activity: WeakReference<Activity>? = null
     private var registered = false
+    /** Play's mobile-data question is shown once per request, not on every progress update. */
+    private var confirmShown = false
 
     private val update = AssetPackStateUpdateListener { s ->
         if (s.name() !in requested) return@AssetPackStateUpdateListener
@@ -70,7 +72,9 @@ object ModelStore {
         when (s.status()) {
             // Large packs can wait for Wi-Fi or for the user's OK to use mobile data; Play shows that question.
             AssetPackStatus.WAITING_FOR_WIFI, AssetPackStatus.REQUIRES_USER_CONFIRMATION ->
-                activity?.get()?.let { a -> if (!a.isFinishing) manager(a).showConfirmationDialog(a) }
+                if (!confirmShown) activity?.get()?.let { a ->
+                    if (!a.isFinishing) { confirmShown = true; manager(a).showConfirmationDialog(a) }
+                }
             AssetPackStatus.FAILED -> finish("Google Play couldn't deliver the models (error ${s.errorCode()}). Try again.")
             AssetPackStatus.CANCELED -> finish("The download was cancelled. Try again.")
         }
@@ -95,6 +99,7 @@ object ModelStore {
         if (!registered) { m.registerListener(update); registered = true }
         requested = packs
         states.clear()
+        confirmShown = false
         busy = true
         // Packs already delivered (fast-follow often is) may send no further update: use the states the fetch returns.
         m.fetch(packs).addOnSuccessListener { st -> st.packStates().values.forEach { update.onStateUpdate(it) } }
@@ -104,4 +109,13 @@ object ModelStore {
     }
 
     const val CAN_PAUSE = false
+    /**
+     * Setup asks Play for the missing packs as soon as it opens, so there is nothing to tap. Only the shared pack comes
+     * with the install itself (fast-follow): shipping both speech encoders at install would cost every phone about
+     * 600 MB it never uses, so the one this phone needs is requested here.
+     */
+    const val AUTO_FETCH = true
+    const val STEP_TITLE = "Get the models"
+    fun missingNote(mb: Long) = "Google Play delivers them: about ${(mb + 50) / 100 * 100} MB, once."
+    fun upgradeNote(mb: Long) = "Faster speech for this phone's NPU: Google Play delivers about $mb MB, once."
 }
