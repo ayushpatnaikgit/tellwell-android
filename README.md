@@ -88,8 +88,17 @@ Requirements: JDK 17 or newer, the Android SDK (platform 36, build-tools 36), ND
 
 ```sh
 echo "sdk.dir=/path/to/android/sdk" > local.properties
-gradle :app:assembleDebug
+gradle :app:assembleGithubDebug
 ```
+
+There are two builds of the same app:
+
+- **github** (the APK on the releases page): downloads its models itself, so it has the internet permission, used
+  once for that.
+- **play** (for Google Play): Google Play delivers the models as asset packs (`models_common`, fast-follow;
+  `models_cpu` and `models_npu`, on demand), so the app has no internet permission. Fill the packs once with
+  `scripts/fetch-play-models.sh` (each file is checked against its SHA-256; the files are not committed), then run
+  `gradle :app:bundlePlayRelease` for the app bundle.
 
 For a signed release build, add to `local.properties` (never commit it):
 
@@ -98,7 +107,7 @@ tellwell.keystore=/path/to/release.jks
 tellwell.keystorePasswordFile=/path/to/password
 ```
 
-and run `gradle :app:assembleRelease`.
+and run `gradle :app:assembleGithubRelease`.
 
 The prebuilt native libraries in `app/src/main/jniLibs/arm64-v8a` are:
 

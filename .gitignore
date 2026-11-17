@@ -5,3 +5,5 @@ app/.cxx/
 local.properties
 *.gguf
 *.onnx
+# Model files for the Play asset packs (scripts/fetch-play-models.sh); never committed.
+models_*/src/main/assets/

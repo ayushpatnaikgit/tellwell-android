@@ -5,15 +5,16 @@ import android.os.Build
 import java.io.File
 
 /**
- * Speech recognition on a Qualcomm NPU. Such phones download a quantised encoder (590 MB) instead of the CPU one,
+ * Speech recognition on a Qualcomm NPU. Such phones get a quantised encoder (590 MB) instead of the CPU one,
  * and compile it once for their own NPU (a few minutes); the compiled copy then loads in about a second. If the NPU
  * fails on a phone, that is remembered for this app version and the phone uses the CPU encoder instead.
  */
 object Npu {
+    /** The compiled model lives here, in TellWell's own files (the quantised source comes from ModelStore). */
     fun dir(context: Context) = File(Engine.modelsDir(context), "asr-npu")
-    /** The quantised model as downloaded (graph and weights; the graph names the weights file). */
-    fun model(context: Context) = File(dir(context), "enc-w8a16-1000.onnx")
-    fun weights(context: Context) = File(dir(context), "enc-w8a16-1000.onnx.data")
+    /** The quantised model (graph and weights; the graph names the weights file next to it). */
+    fun model(context: Context) = ModelStore.npuModel(context)
+    private fun weights(context: Context) = File(model(context).path + ".data")
     /** The compiled model for this phone's NPU: a small graph that names the binary next to it. */
     fun ctx(context: Context) = File(dir(context), "enc-ctx.onnx")
     private fun ctxBin(context: Context) = File(dir(context), "enc-ctx_qnn.bin")
@@ -33,7 +34,7 @@ object Npu {
         val src = compiling(context)
         val ok = listOf("enc-ctx.onnx", "enc-ctx_qnn.bin").all { File(src, it).renameTo(File(dir(context), it)) }
         src.deleteRecursively()
-        if (ok) { model(context).delete(); weights(context).delete(); prefs(context).edit().remove(attemptsKey).apply() }
+        if (ok) { ModelStore.removeNpuModel(context); prefs(context).edit().remove(attemptsKey).apply() }
         return ok
     }
 
@@ -51,7 +52,8 @@ object Npu {
 
     fun markFailed(context: Context) {
         prefs(context).edit().putBoolean(failedKey, true).apply()
-        dir(context).deleteRecursively()
+        listOf("enc-ctx.onnx", "enc-ctx_qnn.bin", "compiling").forEach { File(dir(context), it).deleteRecursively() }
+        ModelStore.removeNpuModel(context)
     }
 
     private val failedKey = "failed-${BuildConfig.VERSION_CODE}"

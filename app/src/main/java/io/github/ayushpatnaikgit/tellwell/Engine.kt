@@ -43,7 +43,6 @@ object Engine {
     @Volatile private var cleanupOn = false
 
     fun modelsDir(context: Context) = File(context.filesDir, "models")
-    private fun asrDir(context: Context) = File(modelsDir(context), "asr-v2")
 
     /** Copy-ahead draft length for cleanup (0 = plain greedy). Same text either way, only faster. */
     @Volatile var draftK = 4
@@ -56,13 +55,12 @@ object Engine {
     fun removeOldModels(context: Context) {
         File(modelsDir(context), "asr").takeIf { it.isDirectory }?.deleteRecursively()
     }
-    private fun llmFile(context: Context) = File(modelsDir(context), "s1-mini-freeflow-cleanup-q4_0.gguf")
-
-    private fun cpuEncoder(context: Context) = File(asrDir(context), "encoder.int8.onnx")
+    private fun llmFile(context: Context) = ModelStore.llm(context)
+    private fun cpuEncoder(context: Context) = ModelStore.cpuEncoder(context)
 
     /** Enough to dictate: decoder, joiner, tokens and cleanup, plus a speech encoder for the NPU or the CPU. */
     fun modelsPresent(context: Context): Boolean =
-        listOf("decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt").all { File(asrDir(context), it).isFile } &&
+        listOf(ModelStore.decoder(context), ModelStore.joiner(context), ModelStore.tokens(context)).all { it.isFile } &&
             llmFile(context).isFile &&
             (cpuEncoder(context).isFile || (Npu.candidate(context) && (Npu.compiled(context) || Npu.downloaded(context))))
 
@@ -99,9 +97,8 @@ object Engine {
         try {
             Os.setenv("ADSP_LIBRARY_PATH", context.applicationInfo.nativeLibraryDir, true)
             System.loadLibrary("tellwell_asr")
-            val dir = asrDir(context).absolutePath
             err = AsrNpu.load(context.applicationInfo.nativeLibraryDir, ctx.absolutePath, Npu.model(context).absolutePath,
-                "$dir/decoder.int8.onnx", "$dir/joiner.int8.onnx", "$dir/tokens.txt")
+                ModelStore.decoder(context).absolutePath, ModelStore.joiner(context).absolutePath, ModelStore.tokens(context).absolutePath)
             if (err.isEmpty() && compile && !Npu.finishCompile(context)) err = "could not save the compiled model"
             if (err.isEmpty() && AsrNpu.transcribe(FloatArray(16000)) == null) err = "self-check failed"
         } catch (t: Throwable) {
@@ -113,8 +110,8 @@ object Engine {
             return false
         }
         asrOnNpu = true
-        // The CPU encoder (650 MB) isn't needed any more; it is downloaded again only if the NPU ever fails.
-        cpuEncoder(context).delete()
+        // The CPU encoder (650 MB) isn't needed any more; it is fetched again only if the NPU ever fails.
+        if (cpuEncoder(context).isFile) ModelStore.removeCpuEncoder(context)
         return true
     }
 
@@ -145,16 +142,15 @@ object Engine {
             status = "Loading"
         }
         if (!asrOnNpu) try {
-            val dir = asrDir(context).absolutePath
             asr = OfflineRecognizer(
                 config = OfflineRecognizerConfig(
                     modelConfig = OfflineModelConfig(
                         transducer = OfflineTransducerModelConfig(
-                            encoder = "$dir/encoder.int8.onnx",
-                            decoder = "$dir/decoder.int8.onnx",
-                            joiner = "$dir/joiner.int8.onnx",
+                            encoder = cpuEncoder(context).absolutePath,
+                            decoder = ModelStore.decoder(context).absolutePath,
+                            joiner = ModelStore.joiner(context).absolutePath,
                         ),
-                        tokens = "$dir/tokens.txt",
+                        tokens = ModelStore.tokens(context).absolutePath,
                         modelType = "nemo_transducer",
                         numThreads = 2,
                     ),

@@ -186,7 +186,7 @@ class MainActivity : Activity() {
         status = text("", 13.5f, 500, p.muted, center = true)
         col.addView(status, wide)
         gap(6)
-        col.addView(text("What you say never leaves this phone. The internet is only used once, to download the models from GitHub.", 13.5f, 400, p.faint, center = true), wide)
+        col.addView(text(ModelStore.SOURCE_NOTE, 13.5f, 400, p.faint, center = true), wide)
         setContentView(scroll)
         watchDownload()
 
@@ -226,11 +226,11 @@ class MainActivity : Activity() {
         micStep.setDone(mic)
         kbdStep.setDone(enabled)
         val have = Engine.modelsPresent(this)
-        val missingMb = ModelDownloader.missing(this).sumOf { it.size } / 1_000_000
+        val missingMb = ModelStore.missingBytes(this) / 1_000_000
         // A phone already dictating on the CPU can download the faster NPU encoder.
         val upgrade = have && missingMb > 0 && Npu.candidate(this)
         modelStep.setDone(have && !upgrade)
-        if (!ModelDownloader.running) modelStep.bodyView.text = when {
+        if (!ModelStore.busy) modelStep.bodyView.text = when {
             !have -> downloadNote ?: "About ${(missingMb + 50) / 100 * 100} MB, once. Use Wi-Fi."
             upgrade -> downloadNote ?: "Faster speech for this phone's NPU: about $missingMb MB more, once."
             else -> "Downloaded and verified."
@@ -251,37 +251,35 @@ class MainActivity : Activity() {
     private var downloadNote: String? = null
 
     private fun startDownload() {
-        if (ModelDownloader.running) {
-            startService(Intent(this, DownloadService::class.java).setAction(DownloadService.ACTION_PAUSE))
-            return
-        }
-        // The progress notification needs this on Android 13+; the download works without it.
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
-        }
-        modelStep.button.text = "Pause"
+        val wasBusy = ModelStore.busy
+        ModelStore.start(this)
+        if (wasBusy) return
+        modelStep.button.text = if (ModelStore.CAN_PAUSE) "Pause" else ""
         modelStep.bodyView.text = "Starting…"
-        startForegroundService(Intent(this, DownloadService::class.java))
     }
 
     private fun watchDownload() {
-        ModelDownloader.listener = { done, total, error, finished ->
+        ModelStore.listener = { done, total, error, finished ->
             main.post {
                 if (!finished) {
-                    modelStep.button.text = "Pause"
+                    modelStep.button.text = if (ModelStore.CAN_PAUSE) "Pause" else ""
                     modelStep.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
                 } else {
-                    modelStep.button.text = if (error == null) "Download" else "Resume"
+                    modelStep.button.text = if (error == null || !ModelStore.CAN_PAUSE) "Download" else "Resume"
                     downloadNote = error
                     refresh()
-                    if (error == null) Engine.ensureLoaded(this) { main.post { refresh() } }
+                    // New models: load them, or (on a phone already dictating on the CPU) switch to the NPU encoder.
+                    if (error == null) {
+                        if (Engine.ready) Engine.upgradeToNpu(this) { main.post { refresh() } }
+                        else Engine.ensureLoaded(this) { main.post { refresh() } }
+                    }
                 }
             }
         }
     }
 
     override fun onDestroy() {
-        ModelDownloader.listener = null
+        ModelStore.listener = null
         super.onDestroy()
     }
 
