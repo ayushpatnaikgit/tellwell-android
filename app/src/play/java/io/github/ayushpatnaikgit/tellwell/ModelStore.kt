@@ -115,6 +115,17 @@ object ModelStore {
     }
 
     const val CAN_PAUSE = false
+
+    /** What the setup screen says while packs arrive: Play downloads, then unpacks into the app's storage. */
+    fun progressText(done: Long, total: Long): String {
+        val st = requested.mapNotNull { states[it]?.status() }
+        return when {
+            st.any { it == AssetPackStatus.WAITING_FOR_WIFI } -> "Waiting for Wi-Fi…"
+            st.isNotEmpty() && st.none { it == AssetPackStatus.DOWNLOADING || it == AssetPackStatus.PENDING } &&
+                st.any { it == AssetPackStatus.TRANSFERRING } -> "Unpacking the models…"
+            else -> "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
+        }
+    }
     /**
      * Setup asks Play for the missing packs as soon as it opens, so there is nothing to tap. Only the shared pack comes
      * with the install itself (fast-follow): shipping both speech encoders at install would cost every phone about

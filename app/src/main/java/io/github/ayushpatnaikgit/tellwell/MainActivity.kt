@@ -245,6 +245,8 @@ class MainActivity : Activity() {
         val preparing = have && Engine.preparing(this)
         modelStep.titleView.text = if (preparing) "Compiling the models" else ModelStore.STEP_TITLE
         modelStep.setDone(have && !upgrade && !preparing)
+        // No action to offer while compiling, or while Play delivers packs (there's nothing to pause there).
+        if (preparing || (ModelStore.busy && !ModelStore.CAN_PAUSE)) modelStep.button.visibility = View.GONE
         if (!ModelStore.busy) modelStep.bodyView.text = when {
             !have -> downloadNote ?: ModelStore.missingNote(missingMb)
             preparing -> "For this phone's NPU: about a minute, once. Keep TellWell open; you can dictate when it's done."
@@ -279,7 +281,8 @@ class MainActivity : Activity() {
             main.post {
                 if (!finished) {
                     modelStep.button.text = if (ModelStore.CAN_PAUSE) "Pause" else ""
-                    modelStep.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
+                    if (!ModelStore.CAN_PAUSE) modelStep.button.visibility = View.GONE
+                    modelStep.bodyView.text = ModelStore.progressText(done, total)
                 } else {
                     modelStep.button.text = if (error == null || !ModelStore.CAN_PAUSE) "Download" else "Resume"
                     downloadNote = error

@@ -50,6 +50,8 @@ object ModelStore {
     }
 
     const val CAN_PAUSE = true
+
+    fun progressText(done: Long, total: Long) = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
     /** The user starts the download (it's about 1 GB). */
     const val AUTO_FETCH = false
     const val STEP_TITLE = "Download the models"
