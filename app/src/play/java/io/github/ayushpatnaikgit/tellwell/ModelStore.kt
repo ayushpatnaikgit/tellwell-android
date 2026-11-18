@@ -67,6 +67,8 @@ object ModelStore {
     private var confirmShown = false
 
     private val update = AssetPackStateUpdateListener { s ->
+        // Pack name, status and error code only (no user content), to diagnose delivery.
+        android.util.Log.i("TellWellPacks", "${s.name()} status=${s.status()} error=${s.errorCode()} ${s.bytesDownloaded()}/${s.totalBytesToDownload()}")
         if (s.name() !in requested) return@AssetPackStateUpdateListener
         states[s.name()] = s
         when (s.status()) {
@@ -92,6 +94,8 @@ object ModelStore {
     /** Asks Google Play for the packs this phone still needs. */
     fun start(activity: Activity) {
         if (busy) return
+        val m0 = manager(activity)
+        android.util.Log.i("TellWellPacks", "locations: " + listOf(COMMON, CPU, NPU).joinToString { "$it=${m0.getPackLocation(it) != null}" })
         val packs = needed(activity)
         if (packs.isEmpty()) { listener?.invoke(0, 0, null, true); return }
         this.activity = WeakReference(activity)
@@ -104,8 +108,10 @@ object ModelStore {
         // Packs already delivered (fast-follow often is) may send no further update: use the states the fetch returns.
         m.fetch(packs).addOnSuccessListener { st -> st.packStates().values.forEach { update.onStateUpdate(it) } }
             .addOnFailureListener { e ->
-            finish("Couldn't reach Google Play (${e.javaClass.simpleName}). Try again.")
-        }
+                val code = (e as? com.google.android.play.core.assetpacks.AssetPackException)?.errorCode
+                android.util.Log.w("TellWellPacks", "fetch $packs failed: ${e.javaClass.simpleName} code=$code")
+                finish("Couldn't reach Google Play (error ${code ?: e.javaClass.simpleName}). Try again.")
+            }
     }
 
     const val CAN_PAUSE = false

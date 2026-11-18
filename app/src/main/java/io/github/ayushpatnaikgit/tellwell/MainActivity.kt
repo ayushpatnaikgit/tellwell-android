@@ -52,6 +52,9 @@ class MainActivity : Activity() {
         private val badge = TextView(this@MainActivity).apply {
             gravity = Gravity.CENTER; textSize = 15f; typeface = Fonts.inter(this@MainActivity, 700)
         }
+        val titleView = TextView(this@MainActivity).apply {
+            textSize = 16.5f; typeface = Fonts.inter(this@MainActivity, 600); setTextColor(p.ink)
+        }
         val bodyView = TextView(this@MainActivity).apply {
             textSize = 14f; typeface = Fonts.inter(this@MainActivity, 400); setTextColor(p.muted)
         }
@@ -63,9 +66,7 @@ class MainActivity : Activity() {
         init {
             view.addView(badge, LinearLayout.LayoutParams(dpi(30), dpi(30)))
             val text = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dpi(14), 0, 0, 0) }
-            text.addView(TextView(this@MainActivity).apply {
-                this.text = title; textSize = 16.5f; typeface = Fonts.inter(this@MainActivity, 600); setTextColor(p.ink)
-            })
+            text.addView(titleView.apply { this.text = title })
             text.addView(bodyView.apply { this.text = body })
             view.addView(text, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             view.addView(button)
@@ -240,9 +241,13 @@ class MainActivity : Activity() {
         val missingMb = ModelStore.missingBytes(this) / 1_000_000
         // A phone already dictating on the CPU can download the faster NPU encoder.
         val upgrade = have && missingMb > 0 && Npu.candidate(this)
-        modelStep.setDone(have && !upgrade)
+        // The step is done only when the models can be used, so a compile in progress keeps it open.
+        val preparing = have && Engine.preparing(this)
+        modelStep.titleView.text = if (preparing) "Compiling the models" else ModelStore.STEP_TITLE
+        modelStep.setDone(have && !upgrade && !preparing)
         if (!ModelStore.busy) modelStep.bodyView.text = when {
             !have -> downloadNote ?: ModelStore.missingNote(missingMb)
+            preparing -> "For this phone's NPU: about a minute, once. Keep TellWell open; you can dictate when it's done."
             upgrade -> downloadNote ?: ModelStore.upgradeNote(missingMb)
             else -> "Downloaded and verified."
         }

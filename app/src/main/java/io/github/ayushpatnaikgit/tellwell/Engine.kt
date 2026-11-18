@@ -37,6 +37,16 @@ object Engine {
     @Volatile var status = "Not loaded"
         private set
     private var asr: OfflineRecognizer? = null
+    /**
+     * Compiling the speech model for this phone's NPU (about a minute, once). Dictation waits until it's done, so the
+     * keyboard says so instead of listening.
+     */
+    @Volatile var compiling = false
+        private set
+
+    /** Compiling now, or about to (an NPU phone whose downloaded model hasn't been compiled yet). */
+    fun preparing(context: Context): Boolean =
+        compiling || (!ready && Npu.candidate(context) && !Npu.compiled(context) && Npu.downloaded(context))
     /** Speech recognition runs on the NPU (else on the CPU with sherpa-onnx). */
     @Volatile var asrOnNpu = false
         private set
@@ -91,6 +101,7 @@ object Engine {
             if (!Npu.beginCompile(context)) return false
             status = "Getting ready for this phone's NPU: keep TellWell open for about a minute (once)"
             Npu.compiling(context).apply { deleteRecursively(); mkdirs() }
+            compiling = true
         }
         val ctx = if (compile) java.io.File(Npu.compiling(context), "enc-ctx.onnx") else Npu.ctx(context)
         var err: String
@@ -103,6 +114,8 @@ object Engine {
             if (err.isEmpty() && AsrNpu.transcribe(FloatArray(16000)) == null) err = "self-check failed"
         } catch (t: Throwable) {
             err = t.javaClass.simpleName
+        } finally {
+            compiling = false
         }
         if (err.isNotEmpty()) {
             android.util.Log.w("TellWellASR", "NPU speech unavailable: $err")

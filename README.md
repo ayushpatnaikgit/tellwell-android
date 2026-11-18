@@ -18,7 +18,7 @@
 </p>
 
 TellWell is a voice keyboard that works alongside the keyboard you already use. Type as usual; when you'd rather
-talk, tap the globe key. TellWell starts listening at once. Tap when you're done: it types what you meant, without
+talk, switch to TellWell (the keyboard icon at the bottom right of the screen, or the globe key). TellWell starts listening at once. Tap when you're done: it types what you meant, without
 the "um"s, repeated words and false starts, and hands you straight back to your keyboard.
 
 TellWell is free. If it helps you, a star on GitHub helps other people find it.
@@ -31,7 +31,8 @@ TellWell is free. If it helps you, a star on GitHub helps other people find it.
    - **Download the models** (about 1 GB, once; use Wi-Fi). The download keeps going if you lock the phone.
    - **Allow the microphone.**
    - **Turn on the keyboard.** Your current keyboard stays the main one.
-3. In any app, tap the globe key on your keyboard (or the keyboard icon at the bottom of the screen) and pick TellWell.
+3. In any app, switch keyboards and pick TellWell: tap the keyboard icon at the bottom right of the screen, or the globe
+   key if your keyboard shows one.
 
 Using TellWell:
 
