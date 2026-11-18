@@ -38,6 +38,9 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var mark: MarkView
     private lateinit var modelStep: Step
+    private companion object {
+        const val PRIVACY_URL = "https://ayushpatnaikgit.github.io/tellwell/android/privacy/"
+    }
 
     /** A setup row: teal number (a check when done), title and note, and a teal text action. */
     private inner class Step(val n: Int, title: String, body: String, action: String, onAction: () -> Unit) {
@@ -187,6 +190,12 @@ class MainActivity : Activity() {
         col.addView(status, wide)
         gap(6)
         col.addView(text(ModelStore.SOURCE_NOTE, 13.5f, 400, p.faint, center = true), wide)
+        gap(4)
+        // Opens in the browser; TellWell itself never goes online for this.
+        col.addView(text("Privacy policy", 13.5f, 600, p.accent, center = true).apply {
+            setPadding(0, dpi(8), 0, dpi(8))
+            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL))) }
+        }, wide)
         setContentView(scroll)
         watchDownload()
 
