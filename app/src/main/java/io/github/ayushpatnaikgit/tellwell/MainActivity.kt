@@ -63,6 +63,12 @@ class MainActivity : Activity() {
             setTextColor(p.accent); setPadding(dpi(12), dpi(8), 0, dpi(8))
             setOnClickListener { onAction() }
         }
+        /** A small spinner in place of the action while something is happening (download, unpack, compile). */
+        private val spinner = android.widget.ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleSmall).apply {
+            isIndeterminate = true
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(p.accent)
+            visibility = View.GONE
+        }
         init {
             view.addView(badge, LinearLayout.LayoutParams(dpi(30), dpi(30)))
             val text = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dpi(14), 0, 0, 0) }
@@ -70,7 +76,12 @@ class MainActivity : Activity() {
             text.addView(bodyView.apply { this.text = body })
             view.addView(text, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             view.addView(button)
+            view.addView(spinner, LinearLayout.LayoutParams(dpi(22), dpi(22)).apply { marginStart = dpi(12) })
             setDone(false)
+        }
+        fun setBusy(busy: Boolean) {
+            spinner.visibility = if (busy) View.VISIBLE else View.GONE
+            if (busy) button.visibility = View.GONE
         }
         fun setDone(done: Boolean) {
             badge.text = if (done) "✓" else "$n"
@@ -245,8 +256,8 @@ class MainActivity : Activity() {
         val preparing = have && Engine.preparing(this)
         modelStep.titleView.text = if (preparing) "Compiling the models" else ModelStore.STEP_TITLE
         modelStep.setDone(have && !upgrade && !preparing)
-        // No action to offer while compiling, or while Play delivers packs (there's nothing to pause there).
-        if (preparing || (ModelStore.busy && !ModelStore.CAN_PAUSE)) modelStep.button.visibility = View.GONE
+        // While compiling, or while Play delivers packs (nothing to pause there): a spinner instead of an action.
+        modelStep.setBusy(preparing || (ModelStore.busy && !ModelStore.CAN_PAUSE))
         if (!ModelStore.busy) modelStep.bodyView.text = when {
             !have -> downloadNote ?: ModelStore.missingNote(missingMb)
             preparing -> "For this phone's NPU: about a minute, once. Keep TellWell open; you can dictate when it's done."
@@ -281,7 +292,7 @@ class MainActivity : Activity() {
             main.post {
                 if (!finished) {
                     modelStep.button.text = if (ModelStore.CAN_PAUSE) "Pause" else ""
-                    if (!ModelStore.CAN_PAUSE) modelStep.button.visibility = View.GONE
+                    if (!ModelStore.CAN_PAUSE) modelStep.setBusy(true)
                     modelStep.bodyView.text = ModelStore.progressText(done, total)
                 } else {
                     modelStep.button.text = if (error == null || !ModelStore.CAN_PAUSE) "Download" else "Resume"
