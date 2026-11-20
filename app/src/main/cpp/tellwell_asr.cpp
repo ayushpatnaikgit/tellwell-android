@@ -4,21 +4,34 @@
 // normalised). Audio and text only pass through memory; nothing is logged or written except the compiled model.
 //
 // ONNX Runtime with QNN is a separate library (libonnxruntime_qnn.so) from the one sherpa-onnx uses, opened by path
-// and used only through its C API table, so the two never clash.
-#include <android/log.h>
+// and used only through its C API table, so the two never clash. The same code runs the CPU encoder on phones
+// without a usable NPU, so both paths decode the same way.
+//
+// Names (names.h): words in the text field being typed into and, if the user turned it on, contact names that sound
+// like what was heard, steer a second, boosted beam-search pass and a correction of unsure words. Both stay on the
+// phone (the app has no internet permission) and are never logged.
 #include <dlfcn.h>
+#ifdef __ANDROID__
+#include <android/log.h>
 #include <jni.h>
+#define TW_WARN(...) __android_log_print(ANDROID_LOG_WARN, "TellWellASR", __VA_ARGS__)
+#else
+#include <cstdio>
+#define TW_WARN(...) (std::fprintf(stderr, __VA_ARGS__), std::fputc('\n', stderr))
+#endif
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "kaldi-native-fbank/csrc/online-feature.h"
+#include "names.h"
 #include "ort/onnxruntime_c_api.h"
 
 namespace {
@@ -38,6 +51,16 @@ OrtSession* decoder = nullptr;
 OrtSession* joiner = nullptr;
 OrtMemoryInfo* cpu = nullptr;
 std::vector<std::string> tokens;
+bool encoderOnNpu = false;
+std::vector<std::string> pieces;      // tokens lowercased, for matching names
+tw::Dictionary dictionary;            // English words: a name correction never replaces one
+std::vector<std::string> contacts;    // contact names, only if the user turned it on; empty otherwise
+// Contacts: a name is tried only if it sounds this much like something heard, at most a few per window, and only in the
+// boosted pass (gated by the recogniser's confidence), not the correction of unsure words. Measured with ~220 invented
+// contact names on 700 public real-speech clips: 3 clips worse (looser settings: 7-15); synthetic names 31 -> 53/120.
+double contactSimilarity = 0.75;
+size_t contactLimit = 5;
+bool correctWithContacts = false;
 
 std::string check(OrtStatus* s) {
     if (!s) return "";
@@ -48,17 +71,20 @@ std::string check(OrtStatus* s) {
 std::string check(const std::string& s) { return s; }
 #define TRY(x) do { std::string e_ = check(x); if (!e_.empty()) return e_; } while (0)
 
+#ifdef __ANDROID__
 std::string str(JNIEnv* e, jstring s) {
+    if (!s) return "";
     const char* c = e->GetStringUTFChars(s, nullptr);
     std::string r(c);
     e->ReleaseStringUTFChars(s, c);
     return r;
 }
+#endif
 
 bool exists(const std::string& p) { return std::ifstream(p).good(); }
 
-std::string loadAll(const std::string& lib, const std::string& ctx, const std::string& model, const std::string& dec,
-                    const std::string& joi, const std::string& tok) {
+std::string loadRuntime(const std::string& lib) {
+    if (api) return "";
     void* h = dlopen((lib + "/libonnxruntime_qnn.so").c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!h) return std::string("dlopen: ") + dlerror();
     auto base = reinterpret_cast<const OrtApiBase* (*)()>(dlsym(h, "OrtGetApiBase"));
@@ -67,6 +93,50 @@ std::string loadAll(const std::string& lib, const std::string& ctx, const std::s
     if (!api) return "ORT API version mismatch";
     TRY(api->CreateEnv(ORT_LOGGING_LEVEL_ERROR, "tellwell", &env));
     TRY(api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &cpu));
+    return "";
+}
+
+std::string loadDecoder(const std::string& dec, const std::string& joi, const std::string& tok) {
+    if (decoder && joiner && tokens.size() > kBlank) return "";   // already loaded (NPU after CPU)
+    // Decoder and joiner: small, run once per token, on one CPU thread.
+    OrtSessionOptions* so = nullptr;
+    TRY(api->CreateSessionOptions(&so));
+    TRY(api->SetIntraOpNumThreads(so, 1));
+    std::string err = check(api->CreateSession(env, dec.c_str(), so, &decoder));
+    if (err.empty()) err = check(api->CreateSession(env, joi.c_str(), so, &joiner));
+    api->ReleaseSessionOptions(so);
+    if (!err.empty()) return "decoder: " + err;
+
+    std::ifstream in(tok);
+    std::string line;
+    tokens.clear();
+    while (std::getline(in, line)) {
+        auto sp = line.rfind(' ');
+        if (sp == std::string::npos) continue;
+        size_t id = std::stoul(line.substr(sp + 1));
+        if (tokens.size() <= id) tokens.resize(id + 1);
+        tokens[id] = line.substr(0, sp);
+    }
+    pieces = tw::piecesOf(tokens);
+    return tokens.size() > kBlank ? "" : "bad tokens file";
+}
+
+// The speech encoder on the CPU (phones without a usable NPU), with the same decoding as the NPU path.
+std::string loadCpu(const std::string& lib, const std::string& enc, const std::string& dec, const std::string& joi,
+                    const std::string& tok) {
+    TRY(loadRuntime(lib));
+    OrtSessionOptions* so = nullptr;
+    TRY(api->CreateSessionOptions(&so));
+    TRY(api->SetIntraOpNumThreads(so, 2));
+    std::string err = check(api->CreateSession(env, enc.c_str(), so, &encoder));
+    api->ReleaseSessionOptions(so);
+    if (!err.empty()) return "encoder: " + err;
+    return loadDecoder(dec, joi, tok);
+}
+
+std::string loadAll(const std::string& lib, const std::string& ctx, const std::string& model, const std::string& dec,
+                    const std::string& joi, const std::string& tok) {
+    TRY(loadRuntime(lib));
 
     // Encoder on the NPU. A compiled context (made on this phone, ~3 min the first time) loads in about a second.
     OrtSessionOptions* so = nullptr;
@@ -89,25 +159,19 @@ std::string loadAll(const std::string& lib, const std::string& ctx, const std::s
     std::string err = check(api->CreateSession(env, path->c_str(), so, &encoder));
     api->ReleaseSessionOptions(so);
     if (!err.empty()) return "encoder: " + err;
+    return loadDecoder(dec, joi, tok);
+}
 
-    // Decoder and joiner: small, run once per token, on one CPU thread.
-    TRY(api->CreateSessionOptions(&so));
-    TRY(api->SetIntraOpNumThreads(so, 1));
-    err = check(api->CreateSession(env, dec.c_str(), so, &decoder));
-    if (err.empty()) err = check(api->CreateSession(env, joi.c_str(), so, &joiner));
-    api->ReleaseSessionOptions(so);
-    if (!err.empty()) return "decoder: " + err;
-
-    std::ifstream in(tok);
-    std::string line;
-    while (std::getline(in, line)) {
-        auto sp = line.rfind(' ');
-        if (sp == std::string::npos) continue;
-        size_t id = std::stoul(line.substr(sp + 1));
-        if (tokens.size() <= id) tokens.resize(id + 1);
-        tokens[id] = line.substr(0, sp);
+std::string loadDictionary(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return "no dictionary";
+    std::string w;
+    dictionary.words.clear();
+    while (std::getline(in, w)) {
+        while (!w.empty() && (w.back() == '\r' || w.back() == ' ')) w.pop_back();
+        if (!w.empty()) dictionary.words.insert(tw::lower(w));
     }
-    return tokens.size() > kBlank ? "" : "bad tokens file";
+    return dictionary.loaded() ? "" : "dictionary too small";
 }
 
 // [T][128] log-mel features, normalised per feature over the whole clip.
@@ -164,40 +228,174 @@ struct Decoder {
     }
 };
 
-struct Token { int id; int frame; };  // frame: absolute, in 10 ms feature frames
+using Token = tw::Token;
+constexpr int kOutputs = kBlank + 6;       // 1,025 token scores, then 5 duration scores
+constexpr int kMaxSymbols = 10;
 
-// Greedy TDT decoding of one encoder window.
+// The joiner's 1,030 scores for encoder frame t and a decoder output.
+std::string joint(const float* enc, int encFrames, int t, const std::vector<float>& dec, std::vector<float>& scores) {
+    std::vector<float> e(1024);
+    for (int k = 0; k < 1024; k++) e[k] = enc[k * encFrames + t];
+    int64_t es[] = {1, 1024, 1}, ds[] = {1, 640, 1};
+    OrtValue* in[2] = {};
+    TRY(api->CreateTensorWithDataAsOrtValue(cpu, e.data(), e.size() * 4, es, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[0]));
+    TRY(api->CreateTensorWithDataAsOrtValue(cpu, const_cast<float*>(dec.data()), dec.size() * 4, ds, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[1]));
+    const char* inames[] = {"encoder_outputs", "decoder_outputs"};
+    const char* onames[] = {"outputs"};
+    OrtValue* o = nullptr;
+    std::string err = check(api->Run(joiner, nullptr, inames, in, 2, onames, 1, &o));
+    for (auto* v : in) api->ReleaseValue(v);
+    if (!err.empty()) return err;
+    float* logits;
+    api->GetTensorMutableData(o, (void**)&logits);
+    scores.assign(logits, logits + kOutputs);
+    api->ReleaseValue(o);
+    return "";
+}
+
+std::vector<float> logSoftmax(const float* a, int n) {
+    float top = *std::max_element(a, a + n);
+    double z = 0;
+    for (int i = 0; i < n; i++) z += std::exp(double(a[i] - top));
+    float lz = top + float(std::log(z));
+    std::vector<float> out(a, a + n);
+    for (float& x : out) x -= lz;
+    return out;
+}
+
+// Greedy TDT decoding of one encoder window. Each token keeps how sure the recogniser was of it.
 std::string decodeWindow(const float* enc, int encFrames, int validFrames, int start, std::vector<Token>& out) {
     Decoder d;
     TRY(d.step(kBlank));
-    std::vector<float> e(1024);
-    int64_t es[] = {1, 1024, 1}, ds[] = {1, 640, 1};
+    std::vector<float> logits;
     int t = 0, emitted = 0;
     while (t < validFrames) {
-        for (int k = 0; k < 1024; k++) e[k] = enc[k * encFrames + t];
-        OrtValue* in[2] = {};
-        TRY(api->CreateTensorWithDataAsOrtValue(cpu, e.data(), e.size() * 4, es, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[0]));
-        TRY(api->CreateTensorWithDataAsOrtValue(cpu, d.out.data(), d.out.size() * 4, ds, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[1]));
-        const char* inames[] = {"encoder_outputs", "decoder_outputs"};
-        const char* onames[] = {"outputs"};
-        OrtValue* o = nullptr;
-        std::string err = check(api->Run(joiner, nullptr, inames, in, 2, onames, 1, &o));
-        for (auto* v : in) api->ReleaseValue(v);
-        if (!err.empty()) return err;
-        float* logits;
-        api->GetTensorMutableData(o, (void**)&logits);
-        int tok = int(std::max_element(logits, logits + kBlank + 1) - logits);
-        int skip = kDurations[std::max_element(logits + kBlank + 1, logits + kBlank + 6) - (logits + kBlank + 1)];
-        api->ReleaseValue(o);
+        TRY(joint(enc, encFrames, t, d.out, logits));
+        int tok = int(std::max_element(logits.begin(), logits.begin() + kBlank + 1) - logits.begin());
+        int skip = kDurations[std::max_element(logits.begin() + kBlank + 1, logits.end()) - (logits.begin() + kBlank + 1)];
         if (tok != kBlank) {
-            out.push_back({tok, start + t * kSubsample});
+            double z = 0;
+            for (int i = 0; i <= kBlank; i++) z += std::exp(double(logits[i] - logits[tok]));
+            out.push_back({tok, start + t * kSubsample, float(1.0 / z)});
             TRY(d.step(tok));
             emitted++;
         }
-        if (skip == 0 && (tok == kBlank || emitted >= 10)) skip = 1;
+        if (skip == 0 && (tok == kBlank || emitted >= kMaxSymbols)) skip = 1;
         if (skip > 0) emitted = 0;
         t += skip;
     }
+    return "";
+}
+
+// TDT beam search with boosting (as on the Mac): keeps boost.beam candidate transcripts and lets a listed name compete
+// as a whole instead of losing it at its first piece. Candidates are compared only after consuming the same audio, and
+// the bonus for a name started but not finished is taken back.
+std::string decodeBeam(const float* enc, int encFrames, int validFrames, int start, const tw::Boost& boost,
+                       std::vector<Token>& best) {
+    struct Hyp {
+        std::vector<Token> tokens;
+        float score = 0;
+        Decoder dec;
+        std::set<tw::Partial> active;
+        float credit = 0;
+        int symbols = 0;
+    };
+    const int width = boost.beam;
+    auto prune = [&](std::vector<Hyp>& hyps) {
+        std::map<std::vector<int>, size_t> bestOf;
+        std::vector<Hyp> kept;
+        for (auto& h : hyps) {
+            std::vector<int> key;
+            for (auto& t : h.tokens) key.push_back(t.id);
+            auto f = bestOf.find(key);
+            if (f == bestOf.end()) { bestOf[key] = kept.size(); kept.push_back(std::move(h)); }
+            else if (kept[f->second].score < h.score) kept[f->second] = std::move(h);
+        }
+        std::sort(kept.begin(), kept.end(), [](const Hyp& a, const Hyp& b) { return a.score > b.score; });
+        if (int(kept.size()) > width) kept.resize(size_t(width));
+        hyps.swap(kept);
+    };
+    Hyp first;
+    TRY(first.dec.step(kBlank));
+    std::map<int, std::vector<Hyp>> buckets;
+    buckets[0].push_back(std::move(first));
+    std::vector<Hyp> finished;
+    auto place = [&](Hyp h, int frame) {
+        if (frame >= validFrames) finished.push_back(std::move(h)); else buckets[frame].push_back(std::move(h));
+    };
+    std::vector<float> scores;
+    while (!buckets.empty()) {
+        auto it = buckets.begin();
+        int t = it->first;
+        std::vector<Hyp> current = std::move(it->second);
+        buckets.erase(it);
+        prune(current);
+        while (!current.empty()) {
+            struct Cand { size_t parent; int id, duration; float score; std::set<tw::Partial> active; float credit; };
+            std::vector<Cand> cands;
+            for (size_t hi = 0; hi < current.size(); hi++) {
+                Hyp& hyp = current[hi];
+                TRY(joint(enc, encFrames, t, hyp.dec.out, scores));
+                auto lp = logSoftmax(scores.data(), kBlank + 1);
+                auto dp = logSoftmax(scores.data() + kBlank + 1, 5);
+                // Nothing said here: move on by 1-4 frames (the two likeliest).
+                std::vector<int> blanks = {1, 2, 3, 4};
+                std::sort(blanks.begin(), blanks.end(), [&](int a, int b) { return dp[a] > dp[b]; });
+                for (int k = 0; k < 2; k++) {
+                    Hyp next = hyp;
+                    next.score += lp[kBlank] + dp[blanks[k]];
+                    next.symbols = 0;
+                    place(std::move(next), t + kDurations[blanks[k]]);
+                }
+                // Word-pieces: the likeliest ones, plus any plausible piece that continues a listed name.
+                std::vector<int> order(kBlank);
+                for (int i = 0; i < kBlank; i++) order[i] = i;
+                std::partial_sort(order.begin(), order.begin() + width, order.end(), [&](int a, int b) { return lp[a] > lp[b]; });
+                std::vector<int> ids(order.begin(), order.begin() + width);
+                for (int id = 0; id < kBlank; id++)
+                    if (lp[id] >= boost.floor && std::find(ids.begin(), ids.end(), id) == ids.end() &&
+                        !boost.advance(hyp.active, pieces[id]).empty()) ids.push_back(id);
+                std::vector<int> durations;
+                for (int d = 0; d < 5; d++) if (d > 0 || hyp.symbols + 1 < kMaxSymbols) durations.push_back(d);
+                std::sort(durations.begin(), durations.end(), [&](int a, int b) { return dp[a] > dp[b]; });
+                if (durations.size() > 2) durations.resize(2);
+                for (int id : ids) {
+                    if (lp[id] < boost.beamFloor) continue;
+                    float bonus, credit;
+                    std::set<tw::Partial> active = boost.advance(hyp.active, pieces[id]);
+                    if (!active.empty()) {
+                        // Continuing a name keeps its credit; starting a new one takes back an abandoned one's.
+                        bool continuing = false;
+                        for (auto& p : active) continuing |= p.pos > int(pieces[id].size());
+                        bonus = boost.beta - (continuing ? 0 : hyp.credit);
+                        credit = boost.complete(active) ? 0 : (continuing ? hyp.credit : 0) + boost.beta;
+                    } else {
+                        bonus = -hyp.credit; credit = 0;
+                    }
+                    for (int d : durations) cands.push_back({hi, id, d, hyp.score + lp[id] + dp[d] + bonus, active, credit});
+                }
+            }
+            // Only the best few word-piece expansions are kept, so the decoder runs a few times per step.
+            std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.score > b.score; });
+            if (int(cands.size()) > width) cands.resize(size_t(width));
+            std::vector<Hyp> same;
+            for (auto& c : cands) {
+                Hyp next = current[c.parent];
+                TRY(next.dec.step(c.id));
+                next.tokens.push_back({c.id, start + t * kSubsample, 1.f});
+                next.score = c.score;
+                next.active = c.active;
+                next.credit = c.credit;
+                if (kDurations[c.duration] == 0) { next.symbols++; same.push_back(std::move(next)); }
+                else { next.symbols = 0; place(std::move(next), t + kDurations[c.duration]); }
+            }
+            prune(same);
+            current.swap(same);
+        }
+    }
+    const Hyp* top = nullptr;
+    for (auto& h : finished) if (!top || h.score - h.credit > top->score - top->credit) top = &h;
+    best = top ? top->tokens : std::vector<Token>{};
     return "";
 }
 
@@ -253,7 +451,20 @@ void stitch(std::vector<Token>& all, std::vector<Token> next, int start) {
     all.insert(all.end(), next.begin() + long(from), next.end());
 }
 
-std::string transcribe(const float* audio, int n, std::string& text) {
+// Text of tokens, word-start markers as spaces.
+std::string textOf(const std::vector<Token>& v) {
+    std::string s;
+    for (const Token& t : v) s += tokens[t.id];
+    return tw::stripMarks(s);
+}
+
+// `context`: text in the field being typed into (its names are favoured). Contact names come from `contacts`.
+// `vocabulary`: names to favour as given (none yet in the app; the benchmark passes its own).
+std::string transcribe(const float* audio, int n, const std::string& context, std::string& text,
+                       const std::vector<std::string>& vocabulary = {}) {
+    const std::vector<std::string> fieldNames = tw::nameWords(context, dictionary);
+    std::vector<std::string> listed;   // names for the final correction of unsure words
+    std::vector<std::string> spelled;  // every name used, for its listed spelling
     auto x = features(audio, n);
     int total = int(x.size());
     std::vector<Token> all;
@@ -287,52 +498,122 @@ std::string transcribe(const float* audio, int n, std::string& text) {
         api->GetTensorMutableData(o[1], (void**)&encLen);
         bool last = start + kFrames >= total;
         std::vector<Token> next;
-        err = decodeWindow(enc, kFrames / kSubsample, int(std::min<int64_t>(*encLen, kFrames / kSubsample)), start, next);
+        int validFrames = int(std::min<int64_t>(*encLen, kFrames / kSubsample));
+        err = decodeWindow(enc, kFrames / kSubsample, validFrames, start, next);
+        // Names for this window: the field's, then contacts that sound like something heard here.
+        std::vector<std::string> terms, contactNames;
+        if (err.empty() && !next.empty()) {
+            contactNames = tw::soundingLike(contacts, textOf(next), contactSimilarity, contactLimit);
+            terms = tw::termList({vocabulary, fieldNames, contactNames});
+        }
+        if (err.empty() && !terms.empty()) {
+            tw::Boost boost(terms);
+            std::vector<Token> boosted;
+            err = decodeBeam(enc, kFrames / kSubsample, validFrames, start, boost, boosted);
+            if (err.empty()) next = tw::acceptTerms(boost, next, boosted, pieces);
+            for (auto& t : terms) {
+                if (std::find(spelled.begin(), spelled.end(), t) == spelled.end()) spelled.push_back(t);
+                bool contact = std::find(contactNames.begin(), contactNames.end(), t) != contactNames.end();
+                if (contact && !correctWithContacts) continue;
+                if (std::find(listed.begin(), listed.end(), t) == listed.end()) listed.push_back(t);
+            }
+        }
         if (start == 0) all = std::move(next); else stitch(all, std::move(next), start);
         for (auto* v : o) api->ReleaseValue(v);
         if (last) break;
     }
     api->ReleaseRunOptions(ro);
     if (!err.empty()) return err;
-    std::string s;
-    for (const Token& t : all) s += tokens[t.id];
-    // SentencePiece word marker (U+2581) to spaces.
-    const std::string mark = "\xE2\x96\x81";
-    for (size_t p; (p = s.find(mark)) != std::string::npos;) s.replace(p, mark.size(), " ");
-    size_t a = s.find_first_not_of(' '), b = s.find_last_not_of(' ');
-    text = a == std::string::npos ? "" : s.substr(a, b - a + 1);
+    text = textOf(all);
+    if (spelled.empty()) return "";
+    // Word-pieces match names ignoring case, so a swapped-in name can carry odd capitals ("BJORN"): use the listed one.
+    if (listed.empty()) { text = tw::spellTerms(text, spelled); return ""; }
+    // Words the recogniser was unsure of that sound like a listed name ("Putnamic" -> Patnaik), then listed spellings.
+    std::vector<std::pair<std::string, float>> words;
+    for (const Token& t : all) {
+        std::string piece = tokens[t.id];
+        bool begins = tw::startsWith(piece, tw::kMark);
+        if (begins) piece = piece.substr(tw::kMark.size());
+        if (begins || words.empty()) words.push_back({piece, t.prob});
+        else { words.back().first += piece; words.back().second = std::min(words.back().second, t.prob); }
+    }
+    words.erase(std::remove_if(words.begin(), words.end(), [](auto& w) { return w.first.empty(); }), words.end());
+    text = tw::spellTerms(tw::correctNames(words, listed, dictionary), spelled);
     return "";
 }
 
 }  // namespace
 
+#ifdef __ANDROID__
 extern "C" JNIEXPORT jstring JNICALL
 Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_load(JNIEnv* e, jobject, jstring lib, jstring ctx, jstring model,
                                                     jstring dec, jstring joi, jstring tok) {
     std::lock_guard<std::mutex> g(mu);
-    if (encoder) return e->NewStringUTF("");
+    if (encoder && encoderOnNpu) return e->NewStringUTF("");
+    // A phone that started on the CPU encoder and now has the NPU one: keep the CPU encoder until the NPU one works.
+    OrtSession* previous = encoder;
+    encoder = nullptr;
     std::string err = loadAll(str(e, lib), str(e, ctx), str(e, model), str(e, dec), str(e, joi), str(e, tok));
     if (!err.empty()) {
         // Error text only, never user content.
-        __android_log_print(ANDROID_LOG_WARN, "TellWellASR", "NPU speech unavailable: %s", err.c_str());
+        TW_WARN("NPU speech unavailable: %s", err.c_str());
+        if (encoder) api->ReleaseSession(encoder);
+        encoder = previous;
+    } else {
+        encoderOnNpu = true;
+        if (previous) api->ReleaseSession(previous);
+    }
+    return e->NewStringUTF(err.c_str());
+}
+
+// The speech encoder on the CPU, decoded the same way. "" when ready, else why not (no user content).
+extern "C" JNIEXPORT jstring JNICALL
+Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_loadCpu(JNIEnv* e, jobject, jstring lib, jstring enc, jstring dec,
+                                                       jstring joi, jstring tok) {
+    std::lock_guard<std::mutex> g(mu);
+    if (encoder) return e->NewStringUTF("");
+    std::string err = loadCpu(str(e, lib), str(e, enc), str(e, dec), str(e, joi), str(e, tok));
+    if (!err.empty()) {
+        TW_WARN("CPU speech unavailable: %s", err.c_str());
         if (encoder) { api->ReleaseSession(encoder); encoder = nullptr; }
     }
     return e->NewStringUTF(err.c_str());
 }
 
-// The transcript, or null if the NPU failed (the caller then uses the CPU recogniser).
+// The English word list for name correction. "" when loaded.
 extern "C" JNIEXPORT jstring JNICALL
-Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_transcribe(JNIEnv* e, jobject, jfloatArray samples) {
+Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_loadDictionary(JNIEnv* e, jobject, jstring path) {
+    std::lock_guard<std::mutex> g(mu);
+    return e->NewStringUTF(loadDictionary(str(e, path)).c_str());
+}
+
+// Contact names to consider (empty to turn contacts off). Kept in memory only.
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_setContacts(JNIEnv* e, jobject, jobjectArray names) {
+    std::lock_guard<std::mutex> g(mu);
+    contacts.clear();
+    jsize n = names ? e->GetArrayLength(names) : 0;
+    for (jsize i = 0; i < n; i++) {
+        auto s = static_cast<jstring>(e->GetObjectArrayElement(names, i));
+        contacts.push_back(str(e, s));
+        e->DeleteLocalRef(s);
+    }
+}
+
+// The transcript, or null if recognition failed. `context` is the text around the cursor (its names are favoured).
+extern "C" JNIEXPORT jstring JNICALL
+Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_transcribe(JNIEnv* e, jobject, jfloatArray samples, jstring context) {
     std::lock_guard<std::mutex> g(mu);
     if (!encoder) return nullptr;
     jsize n = e->GetArrayLength(samples);
     std::vector<float> audio(n);
     e->GetFloatArrayRegion(samples, 0, n, audio.data());
     std::string text;
-    std::string err = transcribe(audio.data(), n, text);
+    std::string err = transcribe(audio.data(), n, str(e, context), text);
     if (!err.empty()) {
-        __android_log_print(ANDROID_LOG_WARN, "TellWellASR", "NPU transcription failed: %s", err.c_str());
+        TW_WARN("transcription failed: %s", err.c_str());
         return nullptr;
     }
     return e->NewStringUTF(text.c_str());
 }
+#endif

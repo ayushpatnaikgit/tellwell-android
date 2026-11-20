@@ -35,11 +35,13 @@ class MainActivity : Activity() {
     private lateinit var p: Palette
     private lateinit var micStep: Step
     private lateinit var kbdStep: Step
+    private lateinit var contactsStep: Step
     private lateinit var status: TextView
     private lateinit var mark: MarkView
     private lateinit var modelStep: Step
     private companion object {
         const val PRIVACY_URL = "https://ayushpatnaikgit.github.io/tellwell/android/privacy/"
+        const val CONTACTS_REQUEST = 2
     }
 
     /** A setup row: teal number (a check when done), title and note, and a teal text action. */
@@ -195,8 +197,17 @@ class MainActivity : Activity() {
             elevation = dp(if (p.dark) 0f else 6f)
             setPadding(dpi(18), dpi(16), dpi(18), dpi(16)); minLines = 3; gravity = Gravity.TOP
         })
-        gap(24)
+        gap(28)
 
+        // Optional: contact names help spell names. Off until the user turns it on; the text says what happens before
+        // Android asks for the permission.
+        col.addView(text("Names", 24f, 700, p.ink))
+        gap(4)
+        contactsStep = Step(5, "Spell your contacts' names",
+            "Optional. TellWell checks what you said against your contacts' names, on this phone only. They're kept in " +
+                "memory and never leave the phone.", "Turn on") { toggleContacts() }
+        col.addView(contactsStep.view)
+        gap(24)
 
         status = text("", 13.5f, 500, p.muted, center = true)
         col.addView(status, wide)
@@ -240,6 +251,20 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CONTACTS_REQUEST && Names.contactsAllowed(this)) {
+            Names.setContactsOn(this, true)
+            Engine.refreshNames(this)
+        }
+        refresh()
+    }
+
+    private fun toggleContacts() {
+        when {
+            Names.contactsOn(this) -> Names.setContactsOn(this, false)
+            Names.contactsAllowed(this) -> Names.setContactsOn(this, true)
+            else -> { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), CONTACTS_REQUEST); return }
+        }
+        Engine.refreshNames(this)
         refresh()
     }
 
@@ -248,6 +273,10 @@ class MainActivity : Activity() {
         val enabled = getSystemService(InputMethodManager::class.java).enabledInputMethodList.any { it.packageName == packageName }
         micStep.setDone(mic)
         kbdStep.setDone(enabled)
+        val contacts = Names.contactsOn(this)
+        contactsStep.setDone(contacts)
+        contactsStep.button.visibility = View.VISIBLE
+        contactsStep.button.text = if (contacts) "Turn off" else "Turn on"
         val have = Engine.modelsPresent(this)
         val missingMb = ModelStore.missingBytes(this) / 1_000_000
         // A phone already dictating on the CPU can download the faster NPU encoder.

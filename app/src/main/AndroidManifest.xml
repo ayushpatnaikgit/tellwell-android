@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Optional, off until the user turns it on: contact names help spell names. Read on the phone only. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <!-- How the models arrive differs by build: see src/github and src/play. -->
 
     <application
