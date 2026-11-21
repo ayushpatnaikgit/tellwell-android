@@ -21,13 +21,23 @@ android {
         applicationId = "io.github.ayushpatnaikgit.tellwell"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 7
+        versionName = "0.3.4"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake { arguments += listOf("-DANDROID_STL=c++_static") }
         }
     }
+
+    // Two builds of the same app. github: downloads its models itself (internet permission, used once). play: Google
+    // Play delivers the models as asset packs and the app has no internet permission.
+    flavorDimensions += "store"
+    productFlavors {
+        create("github") { dimension = "store" }
+        create("play") { dimension = "store" }
+    }
+    // Only Play app bundles use these; the GitHub APK doesn't include them.
+    assetPacks += listOf(":models_common", ":models_cpu", ":models_npu")
 
     signingConfigs {
         if (keystore != null && keystorePassword != null) {
@@ -80,4 +90,6 @@ dependencies {
     // Qualcomm AI Engine Direct runtime (QNN) for speech recognition on the NPU. Its licence allows distribution only
     // inside an app, so it comes from Maven at build time and is never committed (see THIRD_PARTY_qnn-runtime_NOTICE.txt).
     implementation("com.qualcomm.qti:qnn-runtime:2.42.0")
+    // Play Asset Delivery (Google Play build only): asks the Play Store for the model packs.
+    "playImplementation"("com.google.android.play:asset-delivery:2.3.0")
 }

@@ -1,0 +1,3 @@
+app/src/main/assets/words.txt is the web2 word list (Webster's Second International Dictionary, 1934), lowercased and
+deduplicated, as distributed with BSD and macOS in /usr/share/dict/words. Its copyright has lapsed (public domain).
+TellWell uses it only to tell English words from names, so that a name is never put in place of a real word.

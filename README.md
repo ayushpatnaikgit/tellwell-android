@@ -18,7 +18,7 @@
 </p>
 
 TellWell is a voice keyboard that works alongside the keyboard you already use. Type as usual; when you'd rather
-talk, tap the globe key. TellWell starts listening at once. Tap when you're done: it types what you meant, without
+talk, switch to TellWell (the keyboard icon at the bottom right of the screen, or the globe key). TellWell starts listening at once. Tap when you're done: it types what you meant, without
 the "um"s, repeated words and false starts, and hands you straight back to your keyboard.
 
 TellWell is free. If it helps you, a star on GitHub helps other people find it.
@@ -31,7 +31,8 @@ TellWell is free. If it helps you, a star on GitHub helps other people find it.
    - **Download the models** (about 1 GB, once; use Wi-Fi). The download keeps going if you lock the phone.
    - **Allow the microphone.**
    - **Turn on the keyboard.** Your current keyboard stays the main one.
-3. In any app, tap the globe key on your keyboard (or the keyboard icon at the bottom of the screen) and pick TellWell.
+3. In any app, switch keyboards and pick TellWell: tap the keyboard icon at the bottom right of the screen, or the globe
+   key if your keyboard shows one.
 
 Using TellWell:
 
@@ -88,8 +89,17 @@ Requirements: JDK 17 or newer, the Android SDK (platform 36, build-tools 36), ND
 
 ```sh
 echo "sdk.dir=/path/to/android/sdk" > local.properties
-gradle :app:assembleDebug
+gradle :app:assembleGithubDebug
 ```
+
+There are two builds of the same app:
+
+- **github** (the APK on the releases page): downloads its models itself, so it has the internet permission, used
+  once for that.
+- **play** (for Google Play): Google Play delivers the models as asset packs (`models_common`, fast-follow;
+  `models_cpu` and `models_npu`, on demand), so the app has no internet permission. Fill the packs once with
+  `scripts/fetch-play-models.sh` (each file is checked against its SHA-256; the files are not committed), then run
+  `gradle :app:bundlePlayRelease` for the app bundle.
 
 For a signed release build, add to `local.properties` (never commit it):
 
@@ -98,7 +108,7 @@ tellwell.keystore=/path/to/release.jks
 tellwell.keystorePasswordFile=/path/to/password
 ```
 
-and run `gradle :app:assembleRelease`.
+and run `gradle :app:assembleGithubRelease`.
 
 The prebuilt native libraries in `app/src/main/jniLibs/arm64-v8a` are:
 

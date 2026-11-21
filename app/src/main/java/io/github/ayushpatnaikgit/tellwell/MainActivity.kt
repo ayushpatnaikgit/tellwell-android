@@ -35,9 +35,14 @@ class MainActivity : Activity() {
     private lateinit var p: Palette
     private lateinit var micStep: Step
     private lateinit var kbdStep: Step
+    private lateinit var contactsStep: Step
     private lateinit var status: TextView
     private lateinit var mark: MarkView
     private lateinit var modelStep: Step
+    private companion object {
+        const val PRIVACY_URL = "https://ayushpatnaikgit.github.io/tellwell/android/privacy/"
+        const val CONTACTS_REQUEST = 2
+    }
 
     /** A setup row: teal number (a check when done), title and note, and a teal text action. */
     private inner class Step(val n: Int, title: String, body: String, action: String, onAction: () -> Unit) {
@@ -49,6 +54,9 @@ class MainActivity : Activity() {
         private val badge = TextView(this@MainActivity).apply {
             gravity = Gravity.CENTER; textSize = 15f; typeface = Fonts.inter(this@MainActivity, 700)
         }
+        val titleView = TextView(this@MainActivity).apply {
+            textSize = 16.5f; typeface = Fonts.inter(this@MainActivity, 600); setTextColor(p.ink)
+        }
         val bodyView = TextView(this@MainActivity).apply {
             textSize = 14f; typeface = Fonts.inter(this@MainActivity, 400); setTextColor(p.muted)
         }
@@ -57,16 +65,25 @@ class MainActivity : Activity() {
             setTextColor(p.accent); setPadding(dpi(12), dpi(8), 0, dpi(8))
             setOnClickListener { onAction() }
         }
+        /** A small spinner in place of the action while something is happening (download, unpack, compile). */
+        private val spinner = android.widget.ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleSmall).apply {
+            isIndeterminate = true
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(p.accent)
+            visibility = View.GONE
+        }
         init {
             view.addView(badge, LinearLayout.LayoutParams(dpi(30), dpi(30)))
             val text = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dpi(14), 0, 0, 0) }
-            text.addView(TextView(this@MainActivity).apply {
-                this.text = title; textSize = 16.5f; typeface = Fonts.inter(this@MainActivity, 600); setTextColor(p.ink)
-            })
+            text.addView(titleView.apply { this.text = title })
             text.addView(bodyView.apply { this.text = body })
             view.addView(text, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             view.addView(button)
+            view.addView(spinner, LinearLayout.LayoutParams(dpi(22), dpi(22)).apply { marginStart = dpi(12) })
             setDone(false)
+        }
+        fun setBusy(busy: Boolean) {
+            spinner.visibility = if (busy) View.VISIBLE else View.GONE
+            if (busy) button.visibility = View.GONE
         }
         fun setDone(done: Boolean) {
             badge.text = if (done) "✓" else "$n"
@@ -155,7 +172,7 @@ class MainActivity : Activity() {
 
         col.addView(text("Set up", 24f, 700, p.ink))
         gap(4)
-        modelStep = Step(1, "Download the models", "About 1 GB, once. Use Wi-Fi.", "Download") { startDownload() }
+        modelStep = Step(1, ModelStore.STEP_TITLE, ModelStore.missingNote(1000), "Download") { startDownload() }
         col.addView(modelStep.view)
         fun divider() = col.addView(View(this).apply { setBackgroundColor(p.line) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(1)))
         divider()
@@ -180,13 +197,28 @@ class MainActivity : Activity() {
             elevation = dp(if (p.dark) 0f else 6f)
             setPadding(dpi(18), dpi(16), dpi(18), dpi(16)); minLines = 3; gravity = Gravity.TOP
         })
-        gap(24)
+        gap(28)
 
+        // Optional: contact names help spell names. Off until the user turns it on; the text says what happens before
+        // Android asks for the permission.
+        col.addView(text("Names", 24f, 700, p.ink))
+        gap(4)
+        contactsStep = Step(5, "Spell your contacts' names",
+            "Optional. TellWell checks what you said against your contacts' names, on this phone only. They're kept in " +
+                "memory and never leave the phone.", "Turn on") { toggleContacts() }
+        col.addView(contactsStep.view)
+        gap(24)
 
         status = text("", 13.5f, 500, p.muted, center = true)
         col.addView(status, wide)
         gap(6)
-        col.addView(text("What you say never leaves this phone. The internet is only used once, to download the models from GitHub.", 13.5f, 400, p.faint, center = true), wide)
+        col.addView(text(ModelStore.SOURCE_NOTE, 13.5f, 400, p.faint, center = true), wide)
+        gap(4)
+        // Opens in the browser; TellWell itself never goes online for this.
+        col.addView(text("Privacy policy", 13.5f, 600, p.accent, center = true).apply {
+            setPadding(0, dpi(8), 0, dpi(8))
+            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_URL))) }
+        }, wide)
         setContentView(scroll)
         watchDownload()
 
@@ -212,11 +244,27 @@ class MainActivity : Activity() {
         super.onResume()
         playIntro()
         refresh()
+        // Play build: ask Google Play for any missing model pack straight away (after a failure, the button retries).
+        if (ModelStore.AUTO_FETCH && downloadNote == null && !ModelStore.busy && ModelStore.missingBytes(this) > 0) startDownload()
         Engine.ensureLoaded(this) { main.post { refresh() } }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CONTACTS_REQUEST && Names.contactsAllowed(this)) {
+            Names.setContactsOn(this, true)
+            Engine.refreshNames(this)
+        }
+        refresh()
+    }
+
+    private fun toggleContacts() {
+        when {
+            Names.contactsOn(this) -> Names.setContactsOn(this, false)
+            Names.contactsAllowed(this) -> Names.setContactsOn(this, true)
+            else -> { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), CONTACTS_REQUEST); return }
+        }
+        Engine.refreshNames(this)
         refresh()
     }
 
@@ -225,14 +273,24 @@ class MainActivity : Activity() {
         val enabled = getSystemService(InputMethodManager::class.java).enabledInputMethodList.any { it.packageName == packageName }
         micStep.setDone(mic)
         kbdStep.setDone(enabled)
+        val contacts = Names.contactsOn(this)
+        contactsStep.setDone(contacts)
+        contactsStep.button.visibility = View.VISIBLE
+        contactsStep.button.text = if (contacts) "Turn off" else "Turn on"
         val have = Engine.modelsPresent(this)
-        val missingMb = ModelDownloader.missing(this).sumOf { it.size } / 1_000_000
+        val missingMb = ModelStore.missingBytes(this) / 1_000_000
         // A phone already dictating on the CPU can download the faster NPU encoder.
         val upgrade = have && missingMb > 0 && Npu.candidate(this)
-        modelStep.setDone(have && !upgrade)
-        if (!ModelDownloader.running) modelStep.bodyView.text = when {
-            !have -> downloadNote ?: "About ${(missingMb + 50) / 100 * 100} MB, once. Use Wi-Fi."
-            upgrade -> downloadNote ?: "Faster speech for this phone's NPU: about $missingMb MB more, once."
+        // The step is done only when the models can be used, so a compile in progress keeps it open.
+        val preparing = have && Engine.preparing(this)
+        modelStep.titleView.text = if (preparing) "Compiling the models" else ModelStore.STEP_TITLE
+        modelStep.setDone(have && !upgrade && !preparing)
+        // While compiling, or while Play delivers packs (nothing to pause there): a spinner instead of an action.
+        modelStep.setBusy(preparing || (ModelStore.busy && !ModelStore.CAN_PAUSE))
+        if (!ModelStore.busy) modelStep.bodyView.text = when {
+            !have -> downloadNote ?: ModelStore.missingNote(missingMb)
+            preparing -> "For this phone's NPU: about a minute, once. Keep TellWell open; you can dictate when it's done."
+            upgrade -> downloadNote ?: ModelStore.upgradeNote(missingMb)
             else -> "Downloaded and verified."
         }
         status.text = if (have) Engine.status else "Models not downloaded yet"
@@ -251,37 +309,36 @@ class MainActivity : Activity() {
     private var downloadNote: String? = null
 
     private fun startDownload() {
-        if (ModelDownloader.running) {
-            startService(Intent(this, DownloadService::class.java).setAction(DownloadService.ACTION_PAUSE))
-            return
-        }
-        // The progress notification needs this on Android 13+; the download works without it.
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
-        }
-        modelStep.button.text = "Pause"
+        val wasBusy = ModelStore.busy
+        ModelStore.start(this)
+        if (wasBusy) return
+        modelStep.button.text = if (ModelStore.CAN_PAUSE) "Pause" else ""
         modelStep.bodyView.text = "Starting…"
-        startForegroundService(Intent(this, DownloadService::class.java))
     }
 
     private fun watchDownload() {
-        ModelDownloader.listener = { done, total, error, finished ->
+        ModelStore.listener = { done, total, error, finished ->
             main.post {
                 if (!finished) {
-                    modelStep.button.text = "Pause"
-                    modelStep.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
+                    modelStep.button.text = if (ModelStore.CAN_PAUSE) "Pause" else ""
+                    if (!ModelStore.CAN_PAUSE) modelStep.setBusy(true)
+                    modelStep.bodyView.text = ModelStore.progressText(done, total)
                 } else {
-                    modelStep.button.text = if (error == null) "Download" else "Resume"
+                    modelStep.button.text = if (error == null || !ModelStore.CAN_PAUSE) "Download" else "Resume"
                     downloadNote = error
                     refresh()
-                    if (error == null) Engine.ensureLoaded(this) { main.post { refresh() } }
+                    // New models: load them, or (on a phone already dictating on the CPU) switch to the NPU encoder.
+                    if (error == null) {
+                        if (Engine.ready) Engine.upgradeToNpu(this) { main.post { refresh() } }
+                        else Engine.ensureLoaded(this) { main.post { refresh() } }
+                    }
                 }
             }
         }
     }
 
     override fun onDestroy() {
-        ModelDownloader.listener = null
+        ModelStore.listener = null
         super.onDestroy()
     }
 

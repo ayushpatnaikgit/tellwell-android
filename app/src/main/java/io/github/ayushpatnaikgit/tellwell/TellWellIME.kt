@@ -97,7 +97,8 @@ class TellWellIME : InputMethodService() {
             !Engine.modelsPresent(this) -> setLabel("Models missing")
             else -> {
                 if (!Engine.ready) Engine.ensureLoaded(this)
-                setLabel("Tap to talk")
+                Engine.refreshNames(this)
+                if (Engine.preparing(this)) showPreparing() else setLabel("Tap to talk")
             }
         }
         mark.isEnabled = !refused
@@ -127,6 +128,21 @@ class TellWellIME : InputMethodService() {
 
     private fun setLabel(s: String) { label.text = s }
 
+    /** Shown while the speech model compiles; checks again every 2 s and offers "Tap to talk" when done. */
+    private val preparingCheck = object : Runnable {
+        override fun run() {
+            if (!shown) return
+            if (Engine.preparing(this@TellWellIME)) { main.postDelayed(this, 2000); return }
+            setLabel("Ready. Tap to talk")
+        }
+    }
+
+    private fun showPreparing() {
+        setLabel("Getting ready for this phone, about a minute (once)")
+        main.removeCallbacks(preparingCheck)
+        main.postDelayed(preparingCheck, 2000)
+    }
+
     private fun onDown() {
         downAt = System.currentTimeMillis()
         stopOnUp = recorder != null       // a tap while listening finishes
@@ -144,6 +160,9 @@ class TellWellIME : InputMethodService() {
         if (refused || busy || recorder != null) return
         if (!hasMic()) { setLabel("Open TellWell to allow the mic"); return }
         if (!Engine.modelsPresent(this)) { setLabel("Models missing"); return }
+        // The first time on an NPU phone, the speech model compiles for about a minute. Don't record a clip that would
+        // only wait: say what's happening, and listen once it's done.
+        if (Engine.preparing(this)) { showPreparing(); return }
         // Record straight away even if the models are still loading. The engine's single worker
         // finishes loading first, then processes this clip.
         if (!Engine.ready) Engine.ensureLoaded(this)
@@ -170,12 +189,14 @@ class TellWellIME : InputMethodService() {
         recorder = null
         main.removeCallbacks(maxListen)
         val audio = r.stop()
+        // Names in the field being typed into help spell what was said (memory only, never stored).
+        val context = Names.fieldText(currentInputConnection, currentInputEditorInfo)
         busy = true
         mark.isEnabled = false
         mark.mode = MarkView.Mode.WRITING
         mark.invalidate()
         setLabel(if (Engine.ready) "Writing…" else "Loading, then writing…")
-        Engine.process(audio) { res ->
+        Engine.process(audio, context) { res ->
             main.post {
                 busy = false
                 mark.isEnabled = true

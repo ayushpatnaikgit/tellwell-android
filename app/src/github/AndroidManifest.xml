@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GitHub build: TellWell downloads its models itself. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Internet is used only by ModelDownloader, once, to fetch the models. Nothing is uploaded. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The download runs as a foreground task with a progress notification, so locking the phone doesn't stop it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application>
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>
