@@ -4287,7 +4287,6 @@ ahriman
 ahrimanian
 ahsan
 aht
-ahtena
 ahu
 ahuatle
 ahuehuete
@@ -13818,6 +13817,7 @@ artophorion
 artotype
 artotypy
 artotyrite
+artsy
 artware
 arty
 aru
@@ -23321,6 +23321,7 @@ bleed
 bleeder
 bleeding
 bleekbok
+bleep
 bleery
 bleeze
 bleezy
@@ -29932,6 +29933,7 @@ capuchin
 capucine
 capulet
 capulin
+caput
 capybara
 caquetio
 car
@@ -31636,6 +31638,7 @@ cauline
 caulis
 caulite
 caulivorous
+caulk
 caulocarpic
 caulocarpous
 caulome
@@ -37632,6 +37635,7 @@ clubwoman
 clubwood
 cluck
 clue
+clued
 cluff
 clump
 clumpish
@@ -45453,7 +45457,6 @@ cromfordite
 cromlech
 cromorna
 cromorne
-cromulent
 cromwell
 cromwellian
 cronartium
@@ -48858,6 +48861,7 @@ debtful
 debtless
 debtor
 debtorship
+debug
 debullition
 debunk
 debunker
@@ -52797,6 +52801,7 @@ diceratidae
 dicerion
 dicerous
 dicetyl
+dicey
 dich
 dichapetalaceae
 dichapetalum
@@ -56568,6 +56573,7 @@ donship
 donsie
 dont
 donum
+donut
 doob
 doocot
 doodab
@@ -57768,6 +57774,7 @@ drybrained
 drycoal
 drydenian
 drydenism
+dryer
 dryfoot
 drygoodsman
 dryhouse
@@ -60594,7 +60601,6 @@ emberizine
 embezzle
 embezzlement
 embezzler
-embiggen
 embiidae
 embiidina
 embind
@@ -63571,6 +63577,7 @@ epoptist
 epornitic
 epornitically
 epos
+epoxy
 eppie
 eppy
 eproboscidea
@@ -68616,6 +68623,7 @@ feminize
 feminologist
 feminology
 feminophobe
+femme
 femora
 femoral
 femorocaudal
@@ -69020,6 +69028,7 @@ fevertwitch
 feverweed
 feverwort
 few
+fewer
 fewness
 fewsome
 fewter
@@ -70076,6 +70085,7 @@ fizzy
 fjarding
 fjeld
 fjerding
+fjord
 fjorgyn
 flabbergast
 flabbergastation
@@ -75520,9 +75530,11 @@ gayatri
 gaybine
 gaycat
 gaydiang
+gayer
 gayish
 gaylussacia
 gaylussite
+gayly
 gayment
 gayness
 gaypoo
@@ -75609,6 +75621,7 @@ geebung
 geechee
 geejee
 geek
+geeky
 geelbec
 geeldikkop
 geelhout
@@ -78401,6 +78414,7 @@ goodyish
 goodyism
 goodyness
 goodyship
+gooey
 goof
 goofer
 goofily
@@ -82568,6 +82582,7 @@ heapstead
 heapy
 hear
 hearable
+heard
 hearer
 hearing
 hearingless
@@ -92134,6 +92149,7 @@ inboard
 inbond
 inborn
 inbound
+inbox
 inbread
 inbreak
 inbreaking
@@ -102322,6 +102338,7 @@ kreutzer
 kriegspiel
 krieker
 krigia
+krill
 krimmer
 krina
 kriophoros
@@ -104663,6 +104680,7 @@ leftover
 leftward
 leftwardly
 leftwards
+lefty
 leg
 legacy
 legal
@@ -108894,6 +108912,7 @@ machinoclast
 machinofacture
 machinotechnique
 machinule
+macho
 machogo
 machopolyp
 machree
@@ -109268,6 +109287,7 @@ maffick
 mafficker
 maffle
 mafflin
+mafia
 mafic
 mafoo
 mafura
@@ -122872,6 +122892,8 @@ neptunian
 neptunism
 neptunist
 neptunium
+nerd
+nerdy
 nereid
 nereidae
 nereidiform
@@ -146648,6 +146670,7 @@ pivotal
 pivotally
 pivoter
 pix
+pixel
 pixie
 pixilated
 pixilation
@@ -147821,10 +147844,8 @@ plicatulate
 plicature
 pliciferous
 pliciform
-plied
 plier
 pliers
-plies
 plight
 plighted
 plighter
@@ -151077,7 +151098,6 @@ potate
 potation
 potative
 potato
-potatoes
 potator
 potatory
 potawatami
@@ -159500,6 +159520,7 @@ pushover
 pushpin
 pushtu
 pushwainling
+pushy
 pusillanimity
 pusillanimous
 pusillanimously
@@ -171430,6 +171451,7 @@ safemaking
 safen
 safener
 safeness
+safer
 safety
 saffarian
 saffarid
@@ -171839,6 +171861,7 @@ salpingostomy
 salpingotomy
 salpinx
 salpoid
+salsa
 salse
 salsifis
 salsify
@@ -172212,6 +172235,7 @@ sandyish
 sane
 sanely
 saneness
+saner
 sanetch
 sanford
 sanforized
@@ -175043,6 +175067,7 @@ scrutoire
 scruze
 scry
 scryer
+scuba
 scud
 scuddaler
 scuddawn
@@ -194417,6 +194442,7 @@ susceptivity
 susceptor
 suscitate
 suscitation
+sushi
 susi
 susian
 susianian
@@ -223820,6 +223846,7 @@ unzealously
 unzealousness
 unzen
 unzephyrlike
+unzip
 unzone
 unzoned
 up
@@ -226018,6 +226045,7 @@ veerable
 veeringly
 veery
 vega
+vegan
 vegasite
 vegeculture
 vegetability
@@ -228165,6 +228193,7 @@ voiding
 voidless
 voidly
 voidness
+voila
 voile
 voiturette
 voivode
@@ -230851,6 +230880,7 @@ widemouthed
 widen
 widener
 wideness
+wider
 widespread
 widespreadedly
 widespreadly
@@ -231051,6 +231081,7 @@ wimp
 wimple
 wimpleless
 wimplelike
+wimpy
 win
 winberry
 wince
@@ -231633,6 +231664,7 @@ woibe
 wok
 wokas
 woke
+woken
 wokowi
 wold
 woldlike

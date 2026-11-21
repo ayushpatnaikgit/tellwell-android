@@ -158,9 +158,11 @@ object Engine {
     private fun loadDictionary(context: Context) {
         try {
             // Copied once per list version (assets are compressed in the APK, so the native side can't read them).
-            val file = File(context.filesDir, "words-1.txt")
+            // Version 2: FreeBSD's copy of the list. Earlier versions' copies are removed.
+            File(context.filesDir, "words-1.txt").delete()
+            val file = File(context.filesDir, "words-2.txt")
             if (!file.isFile) {
-                val tmp = File(context.filesDir, "words-1.txt.part")
+                val tmp = File(context.filesDir, "words-2.txt.part")
                 context.assets.open("words.txt").use { i -> tmp.outputStream().use { i.copyTo(it) } }
                 tmp.renameTo(file)
             }
