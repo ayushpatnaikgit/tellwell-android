@@ -97,6 +97,7 @@ class TellWellIME : InputMethodService() {
             !Engine.modelsPresent(this) -> setLabel("Models missing")
             else -> {
                 if (!Engine.ready) Engine.ensureLoaded(this)
+                Engine.refreshNames(this)
                 if (Engine.preparing(this)) showPreparing() else setLabel("Tap to talk")
             }
         }
@@ -188,12 +189,14 @@ class TellWellIME : InputMethodService() {
         recorder = null
         main.removeCallbacks(maxListen)
         val audio = r.stop()
+        // Names in the field being typed into help spell what was said (memory only, never stored).
+        val context = Names.fieldText(currentInputConnection, currentInputEditorInfo)
         busy = true
         mark.isEnabled = false
         mark.mode = MarkView.Mode.WRITING
         mark.invalidate()
         setLabel(if (Engine.ready) "Writing…" else "Loading, then writing…")
-        Engine.process(audio) { res ->
+        Engine.process(audio, context) { res ->
             main.post {
                 busy = false
                 mark.isEnabled = true
