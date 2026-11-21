@@ -389,6 +389,55 @@ inline std::vector<Token> acceptTerms(const Boost& boost, const std::vector<Toke
     return out;
 }
 
+/// The runs of heard words (first, last word index, counting words as acceptTerms does) a listed term could replace:
+/// a run that includes a word heard with less than acceptConfidence, holds not much more than the term, and sounds
+/// like it (slightly loosened). The boosted pass runs only around these; anywhere else its result would be discarded.
+inline std::vector<std::pair<int, int>> candidateRuns(const Boost& boost, const std::vector<Token>& stock,
+                                                      const std::vector<std::string>& pieces) {
+    struct Word { std::string text; size_t letters; bool unsure; };
+    std::vector<Word> ws;
+    for (size_t i = 0; i < stock.size(); i++) {
+        bool unsure = stock[i].prob < boost.acceptConfidence;
+        if (i == 0 || startsWord(stock[i], pieces)) { ws.push_back({pieces[stock[i].id], 0, unsure}); continue; }
+        ws.back().text += pieces[stock[i].id];
+        ws.back().unsure |= unsure;
+    }
+    bool anyUnsure = false;
+    for (auto& w : ws) { w.text = " " + stripMarks(w.text); w.letters = letters(w.text).size(); anyUnsure |= w.unsure; }
+    std::vector<std::pair<int, int>> runs;
+    if (!anyUnsure) return runs;
+    struct Term { std::string letters, sound; size_t cap; };
+    std::vector<Term> terms;
+    size_t longest = 0;
+    for (auto& t : boost.terms) {
+        std::string l = letters(lower(t));
+        terms.push_back({l, sound(lower(t)), l.size() + std::max<size_t>(2, l.size() / 3)});
+        longest = std::max(longest, terms.back().cap);
+    }
+    auto bound = [](size_t a, size_t b) { return a + b == 0 ? 0.0 : 2.0 * double(std::min(a, b)) / double(a + b); };
+    for (int i = 0; i < int(ws.size()); i++) {
+        size_t count = 0;
+        bool unsure = false;
+        std::string text;
+        for (int j = i; j < int(ws.size()); j++) {
+            count += ws[j].letters;
+            if (count > longest) break;
+            unsure |= ws[j].unsure;
+            text += ws[j].text;
+            if (!unsure) continue;
+            std::string l = letters(text), s = sound(text);
+            for (auto& t : terms) {
+                if (count > t.cap) continue;
+                double soundBound = t.sound.size() >= 2 ? bound(t.sound.size(), s.size()) : 0.0;
+                if ((bound(t.letters.size(), l.size()) + soundBound) / 2 < Boost::minSimilarity - 0.05) continue;
+                double sim = (ratio(t.letters, l) + (t.sound.size() >= 2 ? ratio(t.sound, s) : 0.0)) / 2;
+                if (sim >= Boost::minSimilarity - 0.05) { runs.push_back({i, j}); break; }
+            }
+        }
+    }
+    return runs;
+}
+
 /// Replaces 1-3 heard words with a listed name when the recogniser was unsure of them (< 0.6), at least one isn't an
 /// English word, and they sound like the name (>= 0.7, voicing merged): "Putnamic" -> Patnaik. Spans that already
 /// hold a listed name are skipped, so no word is dropped. Does nothing without a loaded dictionary.

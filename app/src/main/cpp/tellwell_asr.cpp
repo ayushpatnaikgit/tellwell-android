@@ -263,8 +263,13 @@ std::vector<float> logSoftmax(const float* a, int n) {
     return out;
 }
 
-// Greedy TDT decoding of one encoder window. Each token keeps how sure the recogniser was of it.
-std::string decodeWindow(const float* enc, int encFrames, int validFrames, int start, std::vector<Token>& out) {
+// The decoder state just before the greedy pass emitted a word, so the boosted pass can start there.
+struct Checkpoint { size_t token; int t; Decoder dec; };
+
+// Greedy TDT decoding of one encoder window. Each token keeps how sure the recogniser was of it. `checkpoints` (if
+// given) gets the decoder state at the start of every word.
+std::string decodeWindow(const float* enc, int encFrames, int validFrames, int start, std::vector<Token>& out,
+                         std::vector<Checkpoint>* checkpoints = nullptr) {
     Decoder d;
     TRY(d.step(kBlank));
     std::vector<float> logits;
@@ -276,6 +281,7 @@ std::string decodeWindow(const float* enc, int encFrames, int validFrames, int s
         if (tok != kBlank) {
             double z = 0;
             for (int i = 0; i <= kBlank; i++) z += std::exp(double(logits[i] - logits[tok]));
+            if (checkpoints && (out.empty() || tw::startsWith(pieces[tok], tw::kMark))) checkpoints->push_back({out.size(), t, d});
             out.push_back({tok, start + t * kSubsample, float(1.0 / z)});
             TRY(d.step(tok));
             emitted++;
@@ -289,8 +295,9 @@ std::string decodeWindow(const float* enc, int encFrames, int validFrames, int s
 
 // TDT beam search with boosting (as on the Mac): keeps boost.beam candidate transcripts and lets a listed name compete
 // as a whole instead of losing it at its first piece. Candidates are compared only after consuming the same audio, and
-// the bonus for a name started but not finished is taken back.
-std::string decodeBeam(const float* enc, int encFrames, int validFrames, int start, const tw::Boost& boost,
+// the bonus for a name started but not finished is taken back. Runs from the greedy pass's state at `from` up to
+// encoder frame `to`, and returns the tokens it adds.
+std::string decodeBeam(const float* enc, int encFrames, const Checkpoint& from, int to, int start, const tw::Boost& boost,
                        std::vector<Token>& best) {
     struct Hyp {
         std::vector<Token> tokens;
@@ -316,12 +323,12 @@ std::string decodeBeam(const float* enc, int encFrames, int validFrames, int sta
         hyps.swap(kept);
     };
     Hyp first;
-    TRY(first.dec.step(kBlank));
+    first.dec = from.dec;
     std::map<int, std::vector<Hyp>> buckets;
-    buckets[0].push_back(std::move(first));
+    buckets[from.t].push_back(std::move(first));
     std::vector<Hyp> finished;
     auto place = [&](Hyp h, int frame) {
-        if (frame >= validFrames) finished.push_back(std::move(h)); else buckets[frame].push_back(std::move(h));
+        if (frame >= to) finished.push_back(std::move(h)); else buckets[frame].push_back(std::move(h));
     };
     std::vector<float> scores;
     while (!buckets.empty()) {
@@ -498,8 +505,9 @@ std::string transcribe(const float* audio, int n, const std::string& context, st
         api->GetTensorMutableData(o[1], (void**)&encLen);
         bool last = start + kFrames >= total;
         std::vector<Token> next;
+        std::vector<Checkpoint> checkpoints;
         int validFrames = int(std::min<int64_t>(*encLen, kFrames / kSubsample));
-        err = decodeWindow(enc, kFrames / kSubsample, validFrames, start, next);
+        err = decodeWindow(enc, kFrames / kSubsample, validFrames, start, next, &checkpoints);
         // Names for this window: the field's, then contacts that sound like something heard here.
         std::vector<std::string> terms, contactNames;
         if (err.empty() && !next.empty()) {
@@ -508,9 +516,31 @@ std::string transcribe(const float* audio, int n, const std::string& context, st
         }
         if (err.empty() && !terms.empty()) {
             tw::Boost boost(terms);
-            std::vector<Token> boosted;
-            err = decodeBeam(enc, kFrames / kSubsample, validFrames, start, boost, boosted);
-            if (err.empty()) next = tw::acceptTerms(boost, next, boosted, pieces);
+            // The boosted pass runs only around heard words a listed name could replace: from a word before to two
+            // after, starting from the greedy pass's decoder state there. Elsewhere its result would be discarded.
+            std::vector<std::pair<int, int>> spans;   // word ranges [from, to), merged
+            for (auto [a, b] : tw::candidateRuns(boost, next, pieces)) {
+                int from = std::max(0, a - 1), to = std::min(int(checkpoints.size()), b + 3);
+                if (!spans.empty() && from <= spans.back().second) spans.back().second = std::max(spans.back().second, to);
+                else spans.push_back({from, to});
+            }
+            if (!spans.empty()) {
+                std::vector<Token> boosted;
+                size_t copied = 0;
+                for (auto [from, to] : spans) {
+                    const Checkpoint& begin = checkpoints[size_t(from)];
+                    size_t endToken = to < int(checkpoints.size()) ? checkpoints[size_t(to)].token : next.size();
+                    int endFrame = to < int(checkpoints.size()) ? checkpoints[size_t(to)].t : validFrames;
+                    boosted.insert(boosted.end(), next.begin() + long(copied), next.begin() + long(begin.token));
+                    std::vector<Token> part;
+                    err = decodeBeam(enc, kFrames / kSubsample, begin, endFrame, start, boost, part);
+                    if (!err.empty()) break;
+                    boosted.insert(boosted.end(), part.begin(), part.end());
+                    copied = endToken;
+                }
+                boosted.insert(boosted.end(), next.begin() + long(copied), next.end());
+                if (err.empty()) next = tw::acceptTerms(boost, next, boosted, pieces);
+            }
             for (auto& t : terms) {
                 if (std::find(spelled.begin(), spelled.end(), t) == spelled.end()) spelled.push_back(t);
                 bool contact = std::find(contactNames.begin(), contactNames.end(), t) != contactNames.end();
