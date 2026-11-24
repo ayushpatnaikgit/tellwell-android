@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Google Play build: Play delivers the models as asset packs, so TellWell has no internet access at all.
+<!-- TellWell on Google Play: Play delivers the models as asset packs, so TellWell has no internet access at all.
      The removal guarantees that no library adds the permission back. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">

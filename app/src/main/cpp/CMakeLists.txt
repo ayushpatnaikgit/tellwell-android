@@ -27,3 +27,9 @@ target_include_directories(tellwell_asr PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party
     ${CMAKE_SOURCE_DIR}/third_party/kissfft)
 target_link_libraries(tellwell_asr log dl)
+
+# Hindi speech (an optional language): IndicConformer Hindi on the CPU through the same ONNX Runtime, opened at run
+# time by path. One model takes audio and returns CTC log-probabilities; its features are computed inside the model.
+add_library(tellwell_hindi_asr SHARED tellwell_hindi_asr.cpp)
+target_include_directories(tellwell_hindi_asr PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(tellwell_hindi_asr log dl)

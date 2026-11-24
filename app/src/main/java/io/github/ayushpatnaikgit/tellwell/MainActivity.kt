@@ -36,6 +36,9 @@ class MainActivity : Activity() {
     private lateinit var micStep: Step
     private lateinit var kbdStep: Step
     private lateinit var contactsStep: Step
+    private lateinit var hindiStep: Step
+    /** The last language download's error, shown until the next attempt. */
+    private var languageNote: String? = null
     private lateinit var status: TextView
     private lateinit var mark: MarkView
     private lateinit var modelStep: Step
@@ -134,9 +137,10 @@ class MainActivity : Activity() {
         mark = MarkView(this, p).apply { demoLevel = 0.85f }
         col.addView(mark, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(118)))
         gap(10)
-        col.addView(text("TellWell", 36f, 700, p.ink, center = true), wide)
+        col.addView(text(getString(R.string.app_name), 36f, 700, p.ink, center = true), wide)
         gap(4)
-        col.addView(text("Free, private dictation for Android", 16f, 500, p.muted, center = true), wide)
+        col.addView(text(if (BuildConfig.MULTILINGUAL) "Free, private dictation in English and Hindi" else "Free, private dictation for Android",
+            16f, 500, p.muted, center = true), wide)
         gap(40)
 
         // Scene C: the three words, the last in the accent.
@@ -199,11 +203,21 @@ class MainActivity : Activity() {
         })
         gap(28)
 
+        // TellWell Multilingual: optional languages, each with its own speech and cleanup models, downloaded only if the
+        // user adds it.
+        hindiStep = Step(5, "हिंदी  Hindi", "", "Add") { hindiAction() }
+        if (BuildConfig.MULTILINGUAL) {
+            col.addView(text("Languages", 24f, 700, p.ink))
+            gap(4)
+            col.addView(hindiStep.view)
+            gap(28)
+        }
+
         // Optional: contact names help spell names. Off until the user turns it on; the text says what happens before
         // Android asks for the permission.
         col.addView(text("Names", 24f, 700, p.ink))
         gap(4)
-        contactsStep = Step(5, "Spell your contacts' names",
+        contactsStep = Step(if (BuildConfig.MULTILINGUAL) 6 else 5, "Spell your contacts' names",
             "Optional. TellWell checks what you said against your contacts' names, on this phone only. They're kept in " +
                 "memory and never leave the phone.", "Turn on") { toggleContacts() }
         col.addView(contactsStep.view)
@@ -221,6 +235,7 @@ class MainActivity : Activity() {
         }, wide)
         setContentView(scroll)
         watchDownload()
+        watchLanguages()
 
         if (BuildConfig.DEBUG) {
             if (intent.hasExtra("draft")) {
@@ -231,6 +246,8 @@ class MainActivity : Activity() {
             intent.getStringExtra("selftest")?.let { selfTest(it) }
         }
         if (BuildConfig.DEBUG && intent.getBooleanExtra("download", false)) startDownload()
+        if (BuildConfig.DEBUG && BuildConfig.MULTILINGUAL && intent.getStringExtra("addlang") == "hi" &&
+            !Languages.downloaded(this, Lang.HI) && Languages.downloading == null) hindiAction()
     }
 
     /** Plays the film's close once: dance, then settle into the logo. */
@@ -294,12 +311,13 @@ class MainActivity : Activity() {
             else -> "Downloaded and verified."
         }
         status.text = if (have) Engine.status else "Models not downloaded yet"
+        refreshLanguages()
         status.setTextColor(if (Engine.ready) p.accent else p.muted)
         // While loading (or compiling for the NPU, about a minute), keep the status line current, and keep the screen on:
         // the compile needs a lot of memory, and Android stops a visible app last.
         if (have && !Engine.ready) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (have && !Engine.ready && !polling) {
+        if (have && (!Engine.ready || Engine.hindiLoading) && !polling) {
             polling = true
             main.postDelayed({ polling = false; if (!isDestroyed) refresh() }, 2000)
         }
@@ -337,7 +355,77 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Add (download), pause, resume or remove Hindi. */
+    private fun hindiAction() {
+        when {
+            Languages.downloading == Lang.HI ->
+                startService(Intent(this, LanguageDownloadService::class.java).setAction(LanguageDownloadService.ACTION_PAUSE))
+            Languages.downloaded(this, Lang.HI) -> android.app.AlertDialog.Builder(this)
+                .setTitle("Remove Hindi?")
+                .setMessage("This deletes Hindi's models (${Languages.totalBytes(Lang.HI) / 1_000_000} MB). You can add it again later.")
+                .setPositiveButton("Remove") { _, _ -> Languages.remove(this, Lang.HI); refreshLanguages() }
+                .setNegativeButton("Cancel", null)
+                .show()
+            Languages.supported(this, Lang.HI) -> {
+                languageNote = null
+                // The progress notification needs this on Android 13+; the download works without it.
+                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+                }
+                startForegroundService(Intent(this, LanguageDownloadService::class.java).putExtra(LanguageDownloadService.EXTRA_LANG, Lang.HI.code))
+                hindiStep.button.text = "Pause"
+                hindiStep.bodyView.text = "Starting…"
+            }
+        }
+    }
+
+    private fun refreshLanguages() {
+        if (!BuildConfig.MULTILINGUAL) return
+        val l = Lang.HI
+        val mb = Languages.totalBytes(l) / 1_000_000
+        val downloaded = Languages.downloaded(this, l)
+        hindiStep.setDone(Languages.usable(this, l))
+        hindiStep.button.visibility = View.VISIBLE
+        when {
+            !Languages.supported(this, l) -> {
+                hindiStep.bodyView.text = "Needs a phone with 8 GB of memory."
+                hindiStep.button.visibility = View.GONE
+            }
+            Languages.downloading == l -> hindiStep.button.text = "Pause"
+            downloaded -> {
+                hindiStep.button.text = "Remove"
+                hindiStep.bodyView.text = when {
+                    Engine.hindiLoading -> "Loading…"
+                    Languages.failed(this, l) -> "Downloaded, but it couldn't load on this phone."
+                    else -> "Ready. Switch languages on TellWell's keyboard."
+                }
+            }
+            else -> {
+                val left = Languages.missingBytes(this, l)
+                hindiStep.button.text = if (left < Languages.totalBytes(l)) "Resume" else "Add"
+                hindiStep.bodyView.text = languageNote ?: "Speak Hindi, get Devanagari text. About ${(mb + 50) / 100 * 100} MB, once. Use Wi-Fi."
+            }
+        }
+    }
+
+    private fun watchLanguages() {
+        if (!BuildConfig.MULTILINGUAL) return
+        Languages.listener = { lang, done, total, error, finished ->
+            main.post {
+                if (lang != Lang.HI || isDestroyed) return@post
+                if (!finished) {
+                    hindiStep.button.text = "Pause"
+                    hindiStep.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
+                } else {
+                    languageNote = error
+                    refreshLanguages()
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
+        Languages.listener = null
         ModelStore.listener = null
         super.onDestroy()
     }
@@ -349,12 +437,15 @@ class MainActivity : Activity() {
      */
     private fun selfTest(names: String) {
         Engine.ensureLoaded(this) { s -> Log.i("TellWellSelfTest", "load: $s") }
-        for (name in names.split(",")) {
+        // "hi:clip.wav" runs a clip in Hindi (TellWell Multilingual), so one run can switch languages.
+        for (entry in names.split(",")) {
+            val lang = if (entry.startsWith("hi:")) Lang.HI else Lang.EN
+            val name = entry.removePrefix("hi:")
             val samples = readWav(File(filesDir, "selftest/$name"))
             val t0 = System.nanoTime()
-            Engine.process(samples) { r ->
+            Engine.process(samples, "", lang) { r ->
                 val total = (System.nanoTime() - t0) / 1_000_000
-                Log.i("TellWellSelfTest", "draft=${Engine.draftK} audio=${samples.size / 16}ms asr=${r.asrMs}ms cleanup=${r.cleanupMs}ms total=${total}ms")
+                Log.i("TellWellSelfTest", "lang=${lang.code} draft=${Engine.draftK} audio=${samples.size / 16}ms asr=${r.asrMs}ms cleanup=${r.cleanupMs}ms total=${total}ms")
                 Log.i("TellWellSelfTest", "raw: ${r.raw}")
                 Log.i("TellWellSelfTest", "out: ${r.text}")
             }

@@ -40,16 +40,25 @@ Using TellWell:
 - **Hold** the waveform instead for push-to-talk.
 - The keyboard key cancels and goes back without typing anything.
 
+### TellWell Multilingual
+
+TellWell dictates in English. **TellWell Multilingual** is a separate app from the same code that also does Hindi:
+add it in setup (about 2.4 GB, once; phones with 8 GB of memory), speak Hindi and get Devanagari text. With Hindi
+added, the keyboard shows an **English / हिंदी** switch, which remembers your choice. Removing Hindi deletes its
+models. The two apps install side by side.
+
 ## Privacy
 
 - Speech recognition and cleanup run on the phone. What you say is never sent anywhere.
 - The microphone is on only while TellWell is open and listening (at most two minutes at a time). Audio stays in
   memory and is discarded; nothing is saved or logged.
 - TellWell refuses to listen in password fields.
-- The internet permission is used for one thing: downloading the two models over HTTPS from
-  [tellwell-models](https://github.com/ayushpatnaikgit/tellwell-models) (copies of pinned Hugging Face versions, which
-  are the fallback). Each file is kept only if its SHA-256 matches. All network code is in
-  [`ModelDownloader.kt`](app/src/main/java/io/github/ayushpatnaikgit/tellwell/ModelDownloader.kt).
+- The internet permission is used for one thing: downloading models over HTTPS from
+  [tellwell-models](https://github.com/ayushpatnaikgit/tellwell-models). The GitHub APK downloads the English models
+  this way (copies of pinned Hugging Face versions, which are the fallback), and TellWell Multilingual downloads an
+  added language's models (Hindi) this way. Each file is kept only if its SHA-256 matches. All network code is in
+  [`Fetch.kt`](app/src/main/java/io/github/ayushpatnaikgit/tellwell/Fetch.kt). TellWell from Google Play has no
+  internet permission.
 - No analytics, no crash reporting, no accounts.
 
 ## Phones
@@ -78,6 +87,8 @@ Only the Motorola Edge 70 has been tested so far. Reports from other phones are 
 |---|---|---|
 | Speech to text | [NVIDIA Parakeet TDT 0.6B v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) (English): on Snapdragon, statically quantised for the NPU ([tellwell-models](https://github.com/ayushpatnaikgit/tellwell-models)); elsewhere int8 ([sherpa-onnx export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8)) | ONNX Runtime with Qualcomm's QNN runtime on the NPU; [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and ONNX Runtime on the CPU |
 | Cleanup | [S1-mini FreeFlow Cleanup, Q4_0 GGUF](https://huggingface.co/ayushpatnaik/S1-mini-FreeFlow-cleanup-GGUF), a fine-tune of S1-mini by Superwhisper | [llama.cpp](https://github.com/ggml-org/llama.cpp): NPU, GPU or CPU |
+| Hindi speech to text (optional) | [IndicConformer Hindi large](https://huggingface.co/ai4bharat/indicconformer_stt_hi_hybrid_rnnt_large) by AI4Bharat, exported for TellWell as one model that takes audio (CTC; [tellwell-models hindi-v1](https://github.com/ayushpatnaikgit/tellwell-models/releases/tag/hindi-v1)) | ONNX Runtime on the CPU |
+| Hindi cleanup (optional) | Gemma 4 E2B by Google, fine-tuned for Hindi and English dictation cleanup, Q4_0, vocabulary trimmed (same release) | llama.cpp on the CPU, with a guard that puts back a replaced word unless it sounds like what was heard |
 
 The cleanup instructions stay cached in the model's memory between dictations, so each dictation only processes
 your words. On the CPU, cleanup also uses copy-ahead decoding: it guesses the next few words by copying them from
@@ -89,17 +100,19 @@ Requirements: JDK 17 or newer, the Android SDK (platform 36, build-tools 36), ND
 
 ```sh
 echo "sdk.dir=/path/to/android/sdk" > local.properties
-gradle :app:assembleGithubDebug
+gradle :app:assembleGithubEnglishDebug
 ```
 
-There are two builds of the same app:
+There are two apps (**english**: TellWell; **multilingual**: TellWell Multilingual, app id `….multilingual`), each
+in two builds:
 
-- **github** (the APK on the releases page): downloads its models itself, so it has the internet permission, used
-  once for that.
-- **play** (for Google Play): Google Play delivers the models as asset packs (`models_common`, fast-follow;
-  `models_cpu` and `models_npu`, on demand), so the app has no internet permission. Fill the packs once with
+- **github** (the APK on the releases page): downloads its models itself.
+- **play** (for Google Play): Google Play delivers the English models as asset packs (`models_common`, fast-follow;
+  `models_cpu` and `models_npu`, on demand), and TellWell has no internet permission. TellWell Multilingual downloads
+  an added language from tellwell-models, as the GitHub build does: Play's 4 GB limit on asset packs leaves no room
+  for it. Fill the packs once with
   `scripts/fetch-play-models.sh` (each file is checked against its SHA-256; the files are not committed), then run
-  `gradle :app:bundlePlayRelease` for the app bundle.
+  `gradle :app:bundlePlayEnglishRelease` (or `bundlePlayMultilingualRelease`) for the app bundle.
 
 For a signed release build, add to `local.properties` (never commit it):
 
@@ -108,7 +121,7 @@ tellwell.keystore=/path/to/release.jks
 tellwell.keystorePasswordFile=/path/to/password
 ```
 
-and run `gradle :app:assembleGithubRelease`.
+and run `gradle :app:assembleGithubEnglishRelease` (or `assembleGithubMultilingualRelease`).
 
 The prebuilt native libraries in `app/src/main/jniLibs/arm64-v8a` are:
 
@@ -127,4 +140,6 @@ also includes Qualcomm's QNN runtime (`com.qualcomm.qti:qnn-runtime`, fetched fr
 is proprietary and licensed by Qualcomm for distribution only inside an app; it is not part of this repository and
 is not covered by the MIT licence. Its notices are in `THIRD_PARTY_qnn-runtime_NOTICE.txt`. The models are downloaded, not bundled: Parakeet is
 licensed CC BY 4.0 by NVIDIA, and S1-mini is by Superwhisper under Apache 2.0 with a naming clause (see its model
-card).
+card). The optional Hindi models are IndicConformer (MIT, AI4Bharat) and Gemma 4 (Apache 2.0, Google), modified as
+described in the [hindi-v1 release](https://github.com/ayushpatnaikgit/tellwell-models/releases/tag/hindi-v1); their
+licences are in `THIRD_PARTY_IndicConformer_LICENSE` and `THIRD_PARTY_gemma-4_LICENSE`.
