@@ -36,6 +36,10 @@ class MainActivity : Activity() {
     private lateinit var micStep: Step
     private lateinit var kbdStep: Step
     private lateinit var contactsStep: Step
+    private lateinit var hindiStep: Step
+    private lateinit var cleanupStep: Step
+    /** The last language download's error, shown until the next attempt. */
+    private var languageNote: String? = null
     private lateinit var status: TextView
     private lateinit var mark: MarkView
     private lateinit var modelStep: Step
@@ -45,7 +49,8 @@ class MainActivity : Activity() {
     }
 
     /** A setup row: teal number (a check when done), title and note, and a teal text action. */
-    private inner class Step(val n: Int, title: String, body: String, action: String, onAction: () -> Unit) {
+    private inner class Step(val n: Int, title: String, body: String, action: String, private val label: String = "$n",
+                             onAction: () -> Unit) {
         val view = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -86,7 +91,7 @@ class MainActivity : Activity() {
             if (busy) button.visibility = View.GONE
         }
         fun setDone(done: Boolean) {
-            badge.text = if (done) "✓" else "$n"
+            badge.text = if (done) "✓" else label
             badge.setTextColor(if (done) p.accentInk else p.accent)
             badge.background = rounded(if (done) p.accent else p.tint, dp(15f))
             button.visibility = if (done) View.GONE else View.VISIBLE
@@ -134,9 +139,10 @@ class MainActivity : Activity() {
         mark = MarkView(this, p).apply { demoLevel = 0.85f }
         col.addView(mark, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(118)))
         gap(10)
-        col.addView(text("TellWell", 36f, 700, p.ink, center = true), wide)
+        col.addView(text(getString(R.string.app_name), 36f, 700, p.ink, center = true), wide)
         gap(4)
-        col.addView(text("Free, private dictation for Android", 16f, 500, p.muted, center = true), wide)
+        col.addView(text(if (BuildConfig.MULTILINGUAL) "Free, private dictation in English and Hindi" else "Free, private dictation for Android",
+            16f, 500, p.muted, center = true), wide)
         gap(40)
 
         // Scene C: the three words, the last in the accent.
@@ -199,11 +205,23 @@ class MainActivity : Activity() {
         })
         gap(28)
 
+        // TellWell Multilingual: optional languages, each with its own speech and cleanup models, downloaded only if the
+        // user adds it.
+        hindiStep = Step(5, "हिंदी  Hindi", "", "Add") { hindiAction() }
+        cleanupStep = Step(0, "Hindi cleanup", "", "Change", "✎") { cleanupAction() }
+        if (BuildConfig.MULTILINGUAL) {
+            col.addView(text("Languages", 24f, 700, p.ink))
+            gap(4)
+            col.addView(hindiStep.view)
+            col.addView(cleanupStep.view)
+            gap(28)
+        }
+
         // Optional: contact names help spell names. Off until the user turns it on; the text says what happens before
         // Android asks for the permission.
         col.addView(text("Names", 24f, 700, p.ink))
         gap(4)
-        contactsStep = Step(5, "Spell your contacts' names",
+        contactsStep = Step(if (BuildConfig.MULTILINGUAL) 6 else 5, "Spell your contacts' names",
             "Optional. TellWell checks what you said against your contacts' names, on this phone only. They're kept in " +
                 "memory and never leave the phone.", "Turn on") { toggleContacts() }
         col.addView(contactsStep.view)
@@ -221,6 +239,7 @@ class MainActivity : Activity() {
         }, wide)
         setContentView(scroll)
         watchDownload()
+        watchLanguages()
 
         if (BuildConfig.DEBUG) {
             if (intent.hasExtra("draft")) {
@@ -231,6 +250,8 @@ class MainActivity : Activity() {
             intent.getStringExtra("selftest")?.let { selfTest(it) }
         }
         if (BuildConfig.DEBUG && intent.getBooleanExtra("download", false)) startDownload()
+        if (BuildConfig.DEBUG && BuildConfig.MULTILINGUAL && intent.getStringExtra("addlang") == "hi" &&
+            !Languages.downloaded(this, Lang.HI) && Languages.downloading == null) hindiAction()
     }
 
     /** Plays the film's close once: dance, then settle into the logo. */
@@ -294,12 +315,13 @@ class MainActivity : Activity() {
             else -> "Downloaded and verified."
         }
         status.text = if (have) Engine.status else "Models not downloaded yet"
+        refreshLanguages()
         status.setTextColor(if (Engine.ready) p.accent else p.muted)
         // While loading (or compiling for the NPU, about a minute), keep the status line current, and keep the screen on:
         // the compile needs a lot of memory, and Android stops a visible app last.
         if (have && !Engine.ready) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (have && !Engine.ready && !polling) {
+        if (have && (!Engine.ready || Engine.hindiLoading) && !polling) {
             polling = true
             main.postDelayed({ polling = false; if (!isDestroyed) refresh() }, 2000)
         }
@@ -337,7 +359,186 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Add (download), pause, resume or remove Hindi. */
+    private fun hindiAction() {
+        when {
+            Languages.downloading == Lang.HI ->
+                startService(Intent(this, LanguageDownloadService::class.java).setAction(LanguageDownloadService.ACTION_PAUSE))
+            Languages.downloaded(this, Lang.HI) -> android.app.AlertDialog.Builder(this)
+                .setTitle("Remove Hindi?")
+                .setMessage("This deletes Hindi's models (${Languages.presentBytes(this, Lang.HI) / 1_000_000} MB). You can add it again later.")
+                .setPositiveButton("Remove") { _, _ -> Languages.remove(this, Lang.HI); refreshLanguages() }
+                .setNegativeButton("Cancel", null)
+                .show()
+            Languages.supported(this, Lang.HI) -> {
+                // A paused download resumes with the cleanup already chosen; a new one asks which cleanup to get.
+                if (Languages.missingBytes(this, Lang.HI) < Languages.totalBytes(this, Lang.HI)) addHindi()
+                else chooseCleanup("Add Hindi", Languages.chosenCleanup(this), withSpeech = true) { k ->
+                    Languages.chooseCleanup(this, k)
+                    addHindi()
+                }
+            }
+        }
+    }
+
+    private fun addHindi() {
+        // The progress notification needs this on Android 13+; the download works without it.
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+        }
+        startLanguageDownload(hindiStep)
+    }
+
+    /**
+     * The Hindi cleanup choice: one card per size (name, download size, what it does), Standard marked as
+     * recommended. Sizes include the speech model when Hindi is being added ([withSpeech]). Tapping a card picks it.
+     */
+    private fun chooseCleanup(title: String, selected: HindiCleanup, withSpeech: Boolean, picked: (HindiCleanup) -> Unit) {
+        val dialog = android.app.Dialog(this)
+        val speech = if (withSpeech) Languages.speechBytes() else 0L
+        val col = card()
+        col.addView(text(title, 22f, 700, p.ink))
+        col.addView(text(if (withSpeech) "Choose how much Hindi cleanup to download. You can change it later."
+            else "Only the size you choose stays on your phone.", 14f, 400, p.muted).apply { setPadding(0, dpi(6), 0, dpi(10)) })
+        for (k in HindiCleanup.entries) {
+            val on = k == selected
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dpi(16), dpi(14), dpi(16), dpi(14))
+                background = rounded(if (on) p.tint else p.card, dp(16f), if (on) p.accent else p.line, dpi(if (on) 2 else 1))
+                isClickable = true
+                setOnClickListener { dialog.dismiss(); picked(k) }
+            }
+            val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            head.addView(text(k.label, 17f, 700, p.ink))
+            if (k == HindiCleanup.STANDARD) head.addView(text("Recommended", 12f, 600, p.accentInk).apply {
+                background = rounded(p.accent, dp(10f))
+                setPadding(dpi(8), dpi(2), dpi(8), dpi(2))
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dpi(8) })
+            head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            head.addView(text(sizeText(speech + k.model.size), 15f, 600, if (on) p.accent else p.muted))
+            row.addView(head)
+            row.addView(text(k.blurb, 14f, 400, p.muted).apply { setPadding(0, dpi(4), 0, 0) })
+            col.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(10) })
+        }
+        col.addView(text("Cancel", 15f, 600, p.accent, center = true).apply {
+            setPadding(0, dpi(16), 0, dpi(2))
+            setOnClickListener { dialog.dismiss() }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        dialog.setContentView(col)
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        dialog.window?.setLayout((resources.displayMetrics.widthPixels - dpi(32)).coerceAtMost(dpi(480)), android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog.show()
+    }
+
+    private fun sizeText(bytes: Long): String =
+        if (bytes >= 1_000_000_000) String.format(java.util.Locale.US, "%.1f GB", bytes / 1e9) else "${bytes / 1_000_000} MB"
+
+    /** Pause or resume a cleanup download, or choose another Hindi cleanup (Tiny, Standard, Large). */
+    private fun cleanupAction() {
+        val c = this
+        if (Languages.downloading == Lang.HI) {
+            startService(Intent(c, LanguageDownloadService::class.java).setAction(LanguageDownloadService.ACTION_PAUSE))
+            return
+        }
+        val chosen = Languages.chosenCleanup(c)
+        if (!Languages.complete(c, Lang.HI) && !Languages.cleanupFailed(c, chosen)) { startLanguageDownload(cleanupStep); return }
+        chooseCleanup("Hindi cleanup", chosen, withSpeech = false) { k ->
+            if (k == chosen && !Languages.cleanupFailed(c, k)) return@chooseCleanup
+            Languages.chooseCleanup(c, k)
+            if (Languages.complete(c, Lang.HI)) { Engine.prepare(c, Languages.active(c)); refreshLanguages() }
+            else startLanguageDownload(cleanupStep)
+        }
+    }
+
+    private fun startLanguageDownload(step: Step) {
+        languageNote = null
+        startForegroundService(Intent(this, LanguageDownloadService::class.java).putExtra(LanguageDownloadService.EXTRA_LANG, Lang.HI.code))
+        step.button.text = "Pause"
+        step.bodyView.text = "Starting…"
+    }
+
+    /** Download progress belongs to the cleanup row once Hindi itself is on the phone. */
+    private fun progressStep(): Step = if (Languages.downloaded(this, Lang.HI)) cleanupStep else hindiStep
+
+    private fun refreshCleanup() {
+        val c = this
+        val chosen = Languages.chosenCleanup(c)
+        val using = Languages.hindiCleanup(c)
+        cleanupStep.view.visibility =
+            if (Languages.supported(c, Lang.HI) && Languages.downloaded(c, Lang.HI)) View.VISIBLE else View.GONE
+        cleanupStep.setDone(false)
+        cleanupStep.button.visibility = View.VISIBLE
+        val left = Languages.missingBytes(c, Lang.HI)
+        when {
+            Languages.downloading == Lang.HI -> cleanupStep.button.text = "Pause"
+            Languages.cleanupFailed(c, chosen) -> {
+                cleanupStep.button.text = "Change"
+                cleanupStep.bodyView.text = "${chosen.label} couldn't load on this phone" +
+                    (using?.let { ", so Hindi uses ${it.label}." } ?: ".")
+            }
+            left > 0 -> {
+                cleanupStep.button.text = "Resume"
+                cleanupStep.bodyView.text = languageNote ?: ("${chosen.label}: paused, ${left / 1_000_000} MB to go." +
+                    (using?.let { " Hindi uses ${it.label} until then." } ?: ""))
+            }
+            else -> {
+                cleanupStep.button.text = "Change"
+                cleanupStep.bodyView.text = "${chosen.label}. ${chosen.blurb}"
+            }
+        }
+    }
+
+    private fun refreshLanguages() {
+        if (!BuildConfig.MULTILINGUAL) return
+        refreshCleanup()
+        val l = Lang.HI
+        val downloaded = Languages.downloaded(this, l)
+        hindiStep.setDone(Languages.usable(this, l))
+        hindiStep.button.visibility = View.VISIBLE
+        when {
+            !Languages.supported(this, l) -> {
+                hindiStep.bodyView.text = "Needs a phone with 8 GB of memory."
+                hindiStep.button.visibility = View.GONE
+            }
+            Languages.downloading == l && progressStep() == hindiStep -> hindiStep.button.text = "Pause"
+            downloaded -> {
+                hindiStep.button.text = "Remove"
+                hindiStep.bodyView.text = when {
+                    Engine.hindiLoading -> "Loading…"
+                    Languages.failed(this, l) -> "Downloaded, but it couldn't load on this phone."
+                    else -> "Ready. Switch languages on TellWell's keyboard."
+                }
+            }
+            else -> {
+                val left = Languages.missingBytes(this, l)
+                hindiStep.button.text = if (left < Languages.totalBytes(this, l)) "Resume" else "Add"
+                hindiStep.bodyView.text = languageNote ?: "Speak Hindi, get Devanagari text. A one-time download of " +
+                    "${sizeText(Languages.speechBytes() + HindiCleanup.TINY.model.size)} to " +
+                    "${sizeText(Languages.speechBytes() + HindiCleanup.LARGE.model.size)}, depending on the size you pick. Use Wi-Fi."
+            }
+        }
+    }
+
+    private fun watchLanguages() {
+        if (!BuildConfig.MULTILINGUAL) return
+        Languages.listener = { lang, done, total, error, finished ->
+            main.post {
+                if (lang != Lang.HI || isDestroyed) return@post
+                if (!finished) {
+                    val step = progressStep()
+                    step.button.text = "Pause"
+                    step.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
+                } else {
+                    languageNote = error
+                    refreshLanguages()
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
+        Languages.listener = null
         ModelStore.listener = null
         super.onDestroy()
     }
@@ -349,12 +550,15 @@ class MainActivity : Activity() {
      */
     private fun selfTest(names: String) {
         Engine.ensureLoaded(this) { s -> Log.i("TellWellSelfTest", "load: $s") }
-        for (name in names.split(",")) {
+        // "hi:clip.wav" runs a clip in Hindi (TellWell Multilingual), so one run can switch languages.
+        for (entry in names.split(",")) {
+            val lang = if (entry.startsWith("hi:")) Lang.HI else Lang.EN
+            val name = entry.removePrefix("hi:")
             val samples = readWav(File(filesDir, "selftest/$name"))
             val t0 = System.nanoTime()
-            Engine.process(samples) { r ->
+            Engine.process(samples, "", lang) { r ->
                 val total = (System.nanoTime() - t0) / 1_000_000
-                Log.i("TellWellSelfTest", "draft=${Engine.draftK} audio=${samples.size / 16}ms asr=${r.asrMs}ms cleanup=${r.cleanupMs}ms total=${total}ms")
+                Log.i("TellWellSelfTest", "lang=${lang.code} draft=${Engine.draftK} audio=${samples.size / 16}ms asr=${r.asrMs}ms cleanup=${r.cleanupMs}ms total=${total}ms")
                 Log.i("TellWellSelfTest", "raw: ${r.raw}")
                 Log.i("TellWellSelfTest", "out: ${r.text}")
             }

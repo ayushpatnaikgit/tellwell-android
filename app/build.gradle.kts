@@ -21,8 +21,8 @@ android {
         applicationId = "io.github.ayushpatnaikgit.tellwell"
         minSdk = 29
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.3.6"
+        versionCode = 10
+        versionName = "0.3.7"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake { arguments += listOf("-DANDROID_STL=c++_static") }
@@ -31,10 +31,21 @@ android {
 
     // Two builds of the same app. github: downloads its models itself (internet permission, used once). play: Google
     // Play delivers the models as asset packs and the app has no internet permission.
-    flavorDimensions += "store"
+    flavorDimensions += listOf("store", "edition")
     productFlavors {
         create("github") { dimension = "store" }
         create("play") { dimension = "store" }
+        // Two apps from the same code. english: TellWell (English only). multilingual: TellWell Multilingual, a
+        // separate app where the user adds languages (Hindi for now); each language downloads its own models.
+        create("english") {
+            dimension = "edition"
+            buildConfigField("boolean", "MULTILINGUAL", "false")
+        }
+        create("multilingual") {
+            dimension = "edition"
+            applicationIdSuffix = ".multilingual"
+            buildConfigField("boolean", "MULTILINGUAL", "true")
+        }
     }
     // Only Play app bundles use these; the GitHub APK doesn't include them.
     assetPacks += listOf(":models_common", ":models_cpu", ":models_npu")

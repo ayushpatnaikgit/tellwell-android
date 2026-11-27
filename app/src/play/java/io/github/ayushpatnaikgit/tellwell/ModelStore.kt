@@ -43,7 +43,9 @@ object ModelStore {
     fun removeNpuModel(c: Context) { manager(c).removePack(NPU) }
 
     /** Text for the setup screen's privacy line. */
-    const val SOURCE_NOTE = "What you say never leaves this phone. TellWell has no internet access: Google Play delivers its models."
+    val SOURCE_NOTE = if (BuildConfig.MULTILINGUAL)
+        "What you say never leaves this phone. Google Play delivers the English models; the internet is used only to download a language you add."
+    else "What you say never leaves this phone. TellWell has no internet access: Google Play delivers its models."
 
     /** The packs this phone still needs: the NPU encoder on a Qualcomm phone (until compiled), else the CPU one. */
     private fun needed(c: Context): List<String> = listOfNotNull(

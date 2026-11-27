@@ -1,6 +1,6 @@
 #!/bin/sh
 # Fills the Play asset packs (models_common, models_cpu, models_npu) with the model files, from TellWell's model
-# release, keeping each file only if its SHA-256 matches. Run once before `./gradlew :app:bundlePlayRelease`.
+# release, keeping each file only if its SHA-256 matches. Run once before `./gradlew :app:bundlePlayEnglishRelease`.
 # A file already present with the right hash is kept. MODELS_CACHE=<dir> copies from a local folder first.
 set -eu
 cd "$(dirname "$0")/.."

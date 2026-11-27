@@ -23,16 +23,27 @@ object AsrNpu {
     external fun transcribe(samples: FloatArray, context: String): String?
 }
 
-/** llama.cpp bridge (see cpp/tellwell_llm.cpp). */
+/** llama.cpp bridge (see cpp/tellwell_llm.cpp). Slot 0: English cleanup (S1-mini); slot 1: Hindi (Gemma 4 E2B). */
 object LlmNative {
-    external fun load(libDir: String, modelPath: String, prefix: String, devices: String, threads: Int): String
-    external fun complete(suffix: String, maxTokens: Int, draftK: Int): String
-    external fun device(): String
+    external fun load(slot: Int, libDir: String, modelPath: String, prefix: String, devices: String, threads: Int): String
+    external fun complete(slot: Int, suffix: String, maxTokens: Int, draftK: Int): String
+    external fun device(slot: Int): String
+    external fun unload(slot: Int)
+}
+
+/** Hindi speech recognition: IndicConformer Hindi on the CPU (see cpp/tellwell_hindi_asr.cpp). */
+object AsrHindi {
+    /** "" when ready, else why not (no user content). */
+    external fun load(libDir: String, model: String, tokens: String, threads: Int): String
+    /** The Devanagari transcript, or null if recognition failed. */
+    external fun transcribe(samples: FloatArray): String?
+    external fun unload()
 }
 
 /**
- * Speech recognition (Parakeet via sherpa-onnx) and cleanup (S1-mini via llama.cpp), loaded once and kept in memory.
- * All work runs on one background thread. Nothing is written to disk or logged.
+ * Speech recognition and cleanup, loaded once and kept in memory. English: Parakeet (NPU, or the CPU) and S1-mini.
+ * Hindi, if the user added it: IndicConformer and the Hindi Gemma 4 E2B, both on the CPU. All work runs on one
+ * background thread. Nothing is written to disk or logged.
  */
 object Engine {
     data class Result(val text: String, val asrMs: Long, val cleanupMs: Long, val raw: String)
@@ -59,6 +70,14 @@ object Engine {
     /** Speech recognition runs in TellWell's own decoder (NPU or CPU encoder), with names; else sherpa-onnx. */
     @Volatile private var asrNative = false
     @Volatile private var cleanupOn = false
+    /** Hindi speech and cleanup are loaded (Hindi is offered only when both work). */
+    @Volatile private var hindiOn = false
+    /** The Hindi cleanup in memory (file path) and its prompt. */
+    private var hindiPath: String? = null
+    private var hindiPrompt = PromptHindi.GEMMA3
+    /** Hindi is being loaded (after English, so English dictation is ready first). */
+    @Volatile var hindiLoading = false
+        private set
 
     fun modelsDir(context: Context) = File(context.filesDir, "models")
 
@@ -181,6 +200,89 @@ object Engine {
         }
     }
 
+    /** [lang]'s models are loaded and checked now (only the chosen language's cleanup stays in memory). */
+    fun loaded(lang: Lang): Boolean = if (lang == Lang.EN) ready else hindiOn
+
+    /**
+     * Loads an optional language after its download (and English first, if that isn't loaded yet).
+     * [done] gets whether it worked; it runs on the worker thread.
+     */
+    fun loadLanguage(context: Context, lang: Lang, done: (Boolean) -> Unit = {}) {
+        val app = context.applicationContext
+        worker.execute {
+            if (!ready) load(app)
+            // Check the new language loads and passes its self-check, then keep the chosen one in memory.
+            if (ready) useLanguage(app, lang)
+            val ok = loaded(lang)
+            if (ready) useLanguage(app, Languages.active(app))
+            done(ok)
+        }
+    }
+
+    /** Frees a removed language's models (and brings English cleanup back). */
+    fun unload(context: Context, lang: Lang) {
+        if (lang != Lang.HI) return
+        val app = context.applicationContext
+        worker.execute { if (ready) useLanguage(app, Lang.EN) }
+    }
+
+    /**
+     * Hindi: IndicConformer (4 CPU threads, ~0.9 s for 10 s of speech on a Snapdragon 7 Gen 4) and the Hindi cleanup
+     * on the CPU (for a typical sentence with copy-ahead: Tiny ~0.1 s, Standard ~0.35 s, Large ~0.8 s). Both must pass
+     * a self-check; a cleanup that doesn't is remembered and another one on the phone is tried. Worker thread.
+     */
+    private fun loadHindi(context: Context) {
+        if (hindiOn || !Languages.downloaded(context, Lang.HI) || !Languages.supported(context, Lang.HI)) return
+        hindiLoading = true
+        try {
+            System.loadLibrary("tellwell_hindi_asr")
+            val err = AsrHindi.load(context.applicationInfo.nativeLibraryDir, Languages.hindiModel(context).absolutePath,
+                Languages.hindiTokens(context).absolutePath, 4)
+            if (err.isNotEmpty() || AsrHindi.transcribe(FloatArray(16000)) == null) {
+                android.util.Log.w("TellWellASR", "Hindi speech unavailable")
+                Languages.setFailed(context, Lang.HI, true)
+                return
+            }
+            Os.setenv("ADSP_LIBRARY_PATH", context.applicationInfo.nativeLibraryDir, true)
+            System.loadLibrary("tellwell_llm")
+            var ok = false
+            while (!ok) {
+                val k = Languages.hindiCleanup(context) ?: break
+                ok = loadHindiCleanup(context, k)
+                // Didn't load or check out on this phone: remember that, and try another cleanup that is on the phone.
+                if (!ok) Languages.setCleanupFailed(context, k, true)
+            }
+            Languages.setFailed(context, Lang.HI, !ok)
+            if (!ok) {
+                AsrHindi.unload()
+                return
+            }
+            hindiOn = true
+        } catch (t: Throwable) {
+            android.util.Log.w("TellWellASR", "Hindi unavailable: ${t.javaClass.simpleName}")
+        } finally {
+            hindiLoading = false
+        }
+    }
+
+    /** Loads Hindi cleanup [k] into its slot and checks it writes Hindi. Worker thread. */
+    private fun loadHindiCleanup(context: Context, k: HindiCleanup): Boolean {
+        val file = Languages.hindiCleanupFile(context, k)
+        val prompt = k.prompt
+        if (!file.isFile) return false
+        val got = LlmNative.load(HINDI_SLOT, context.applicationInfo.nativeLibraryDir, file.absolutePath, prompt.prefix, "CPU", 4)
+        // "um I'll come to the office tomorrow morning": expected "मैं कल सुबह ऑफिस आऊँगा।". A check that the model
+        // loaded and writes Hindi, not a quality bar, so every cleanup (Tiny too) passes it.
+        val out = if (got.isEmpty()) "" else LlmNative.complete(HINDI_SLOT, prompt.suffix("उम्म मैं कल सुबह ऑफिस आऊँगा"), 40, 0)
+        val ok = listOf("कल", "सुबह", "ऑफिस").all { out.contains(it) } && !out.contains("उम्म") &&
+            out.all { it == ' ' || it in '\u0900'..'\u097F' || it in ".,?!" }
+        android.util.Log.i("TellWellLLM", "Hindi self-check (${k.name}): ${if (ok) "passed" else "failed"}")
+        if (!ok) { LlmNative.unload(HINDI_SLOT); hindiPath = null; return false }
+        hindiPath = file.absolutePath
+        hindiPrompt = prompt
+        return true
+    }
+
     /** Loads both models on the worker thread if needed; [done] runs on the worker thread. */
     fun ensureLoaded(context: Context, done: (String) -> Unit = {}) {
         val app = context.applicationContext
@@ -190,7 +292,11 @@ object Engine {
         }
     }
 
+    /** The application context, kept from the first load for swapping languages' models. */
+    @Volatile private var appContext: Context? = null
+
     private fun load(context: Context) {
+        appContext = context.applicationContext
         if (!modelsPresent(context)) {
             status = "Models missing"
             return
@@ -231,7 +337,20 @@ object Engine {
             status = "Speech model failed to load (${t.javaClass.simpleName})"
             return
         }
-        // Cleanup is optional: if no backend works on this phone, TellWell types the raw transcript instead.
+        loadEnglishCleanup(context)
+        ready = true
+        val speechOn = if (asrOnNpu) "speech on the NPU" else "speech on the CPU"
+        status = if (cleanupOn) "Ready ($speechOn, cleanup on ${when (cleanupDevice) { "HTP0" -> "the NPU"; "GPUOpenCL" -> "the GPU"; else -> "the CPU" }})"
+            else "Ready ($speechOn; cleanup isn't available on this phone)"
+        // Only the chosen language's cleanup stays in memory: Hindi needs most of an 8 GB phone's free memory.
+        if (Languages.active(context) == Lang.HI) useLanguage(context, Lang.HI)
+    }
+
+    /** The English cleanup backend in use ("HTP0", "GPUOpenCL", "CPU"), or "" if none works. */
+    private var cleanupDevice = ""
+
+    /** English cleanup (S1-mini). Optional: if no backend works on this phone, TellWell types the raw transcript. */
+    private fun loadEnglishCleanup(context: Context) {
         var device = ""
         try {
             // The NPU backend loads its DSP code from the app's native library directory.
@@ -240,28 +359,78 @@ object Engine {
             // Fastest first: the NPU, then the GPU, then the CPU. Each must pass a quick correctness check,
             // since a backend can run but compute wrong results on a chip it doesn't fully support.
             for (d in devices) {
-                val got = LlmNative.load(context.applicationInfo.nativeLibraryDir, llmFile(context).absolutePath, Prompt.PREFIX, d, 4)
+                val got = LlmNative.load(ENGLISH_SLOT, context.applicationInfo.nativeLibraryDir, llmFile(context).absolutePath, Prompt.PREFIX, d, 4)
                 if (got.isNotEmpty() && canaryPasses()) { device = got; break }
             }
         } catch (t: Throwable) {
             android.util.Log.w("TellWellLLM", "cleanup unavailable: ${t.javaClass.simpleName}")
         }
         cleanupOn = device.isNotEmpty()
+        cleanupDevice = device
+        englishCleanupLoaded = true
         // Copy-ahead decoding checks several tokens per pass. Measured on a Snapdragon 7 Gen 4: 20% faster on the CPU,
         // but slower on the NPU and GPU, whose small-batch passes cost more than they save. Debug runs can override.
         if (!draftOverridden) draftK = if (device == "CPU") 4 else 0
-        ready = true
-        val speechOn = if (asrOnNpu) "speech on the NPU" else "speech on the CPU"
-        status = if (cleanupOn) "Ready ($speechOn, cleanup on ${when (device) { "HTP0" -> "the NPU"; "GPUOpenCL" -> "the GPU"; else -> "the CPU" }})"
-            else "Ready ($speechOn; cleanup isn't available on this phone)"
+    }
+
+    /** English cleanup is in memory (or was tried and isn't available on this phone). */
+    private var englishCleanupLoaded = false
+
+    /**
+     * Keeps only [lang]'s models in memory: Hindi frees English cleanup (English speech stays, small on the NPU);
+     * English frees Hindi. A switch costs a load (a few seconds) on the next dictation instead of being killed by
+     * Android for using too much memory. Runs on the worker thread.
+     */
+    private fun useLanguage(context: Context, lang: Lang) {
+        if (lang == Lang.HI) {
+            // Already in memory, unless the user changed which Hindi cleanup to use.
+            val want = Languages.hindiCleanup(context)?.let { Languages.hindiCleanupFile(context, it).absolutePath }
+            if (hindiOn && hindiPath == want) return
+            if (hindiOn) {
+                hindiOn = false
+                AsrHindi.unload()
+                LlmNative.unload(HINDI_SLOT)
+                hindiPath = null
+            }
+            if (englishCleanupLoaded) {
+                LlmNative.unload(ENGLISH_SLOT)
+                englishCleanupLoaded = false
+            }
+            loadHindi(context)
+        } else {
+            if (hindiOn) {
+                hindiOn = false
+                AsrHindi.unload()
+                LlmNative.unload(HINDI_SLOT)
+                hindiPath = null
+            }
+            if (!englishCleanupLoaded) loadEnglishCleanup(context)
+        }
+    }
+
+    /** Loads [lang]'s models ahead of the next dictation (the keyboard's switch calls this). */
+    fun prepare(context: Context, lang: Lang) {
+        val app = context.applicationContext
+        worker.execute { if (ready) useLanguage(app, lang) }
     }
 
     /**
-     * Transcribes and cleans up 16 kHz mono audio. [context] is the text around the cursor (its names are favoured;
-     * kept in memory only). [done] runs on the worker thread.
+     * Transcribes and cleans up 16 kHz mono audio in [lang]. [context] is the text around the cursor (its names are
+     * favoured in English; kept in memory only). [done] runs on the worker thread.
      */
-    fun process(samples: FloatArray, context: String = "", done: (Result) -> Unit) {
+    fun process(samples: FloatArray, context: String = "", lang: Lang = Lang.EN, done: (Result) -> Unit) {
         worker.execute {
+            // A dictation in the other language than the one in memory: swap first (a few seconds, once).
+            appContext?.let { if (ready) useLanguage(it, lang) }
+            if (lang == Lang.HI) {
+                if (!hindiOn || samples.size < 1600) { done(Result("", 0, 0, "")); return@execute }
+                val t0 = System.nanoTime()
+                val raw = (AsrHindi.transcribe(samples) ?: "").trim()
+                val t1 = System.nanoTime()
+                val text = if (raw.isEmpty()) "" else cleanupHindi(raw)
+                done(Result(text, (t1 - t0) / 1_000_000, (System.nanoTime() - t1) / 1_000_000, raw))
+                return@execute
+            }
             val recognizer = asr
             // Runs after any load queued before it, so a clip recorded during loading is still processed.
             if (!ready || (recognizer == null && !asrNative) || samples.size < 1600) {
@@ -285,15 +454,34 @@ object Engine {
 
     /** A fixed, invented dictation whose cleanup is known. Garbage output means this backend can't be trusted. */
     private fun canaryPasses(): Boolean {
-        val out = LlmNative.complete(Prompt.suffix("um so lets meet at five no wait six on thursday"), 40, 0)
+        val out = LlmNative.complete(ENGLISH_SLOT, Prompt.suffix("um so lets meet at five no wait six on thursday"), 40, 0)
         val ok = out.contains("Thursday") && (out.contains("6") || out.contains("six", ignoreCase = true)) &&
             !out.contains("five", ignoreCase = true) && out.all { it.code < 0x250 }
-        android.util.Log.i("TellWellLLM", "self-check on ${LlmNative.device()}: ${if (ok) "passed" else "failed"}")
+        android.util.Log.i("TellWellLLM", "self-check on ${LlmNative.device(ENGLISH_SLOT)}: ${if (ok) "passed" else "failed"}")
         return ok
     }
 
+    /**
+     * Hindi cleanup on the CPU with copy-ahead, then the guard that undoes a substituted word which neither sounds
+     * like what was heard nor was said elsewhere (see HindiGuard), and the same length guard as English.
+     */
+    private fun cleanupHindi(raw: String): String {
+        val out = HindiGuard.apply(raw, LlmNative.complete(HINDI_SLOT, hindiPrompt.suffix(raw), 400, 4).trim())
+        if (out == "EMPTY") return ""
+        val rawWords = raw.split(Regex("\\s+")).size
+        val outWords = out.split(Regex("\\s+")).size
+        if (out.isEmpty() || outWords > rawWords * 2 + 8) return raw
+        // A long dictation that comes back under 60% of its words was cut off, not cleaned up: keep what was said.
+        // (Never fired on 769 held-out real Hindi outputs of the Standard and Large cleanups.)
+        if (rawWords >= 20 && outWords < rawWords * 0.6) return raw
+        return out
+    }
+
+    private const val ENGLISH_SLOT = 0
+    private const val HINDI_SLOT = 1
+
     private fun cleanup(raw: String): String {
-        val out = LlmNative.complete(Prompt.suffix(raw), 160, draftK).trim()
+        val out = LlmNative.complete(ENGLISH_SLOT, Prompt.suffix(raw), 160, draftK).trim()
         if (out == "EMPTY") return ""
         // Guard: a cleanup should never be empty for real speech or much longer than what was said.
         val rawWords = raw.split(Regex("\\s+")).size

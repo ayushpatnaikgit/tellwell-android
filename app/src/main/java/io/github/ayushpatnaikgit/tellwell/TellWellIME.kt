@@ -31,6 +31,9 @@ class TellWellIME : InputMethodService() {
     private lateinit var p: Palette
     private lateinit var label: TextView
     private lateinit var mark: MarkView
+    /** English / हिंदी: shown when more than one language is ready. */
+    private lateinit var langSwitch: LinearLayout
+    private val langButtons = HashMap<Lang, TextView>()
     private var refused = false
     private var shown = false
     private var downAt = 0L
@@ -75,7 +78,30 @@ class TellWellIME : InputMethodService() {
         val key = dpi(52)
         row.addView(IconKey(this, p, R.drawable.ic_keyboard, "Cancel and go back to keyboard").apply { onTap = { cancel(); switchBack() } },
             LinearLayout.LayoutParams(key, key))
-        row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        // Between the keyboard key and delete: the language switch, when there is a choice.
+        val middle = LinearLayout(this).apply { gravity = Gravity.CENTER }
+        langSwitch = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dpi(3), dpi(3), dpi(3), dpi(3))
+            background = rounded(p.press, dp(23f))
+            contentDescription = "Dictation language"
+        }
+        for (l in Lang.entries) {
+            val b = TextView(this).apply {
+                text = l.label
+                textSize = 15f
+                typeface = Fonts.inter(this@TellWellIME, 600)
+                gravity = Gravity.CENTER
+                minWidth = dpi(84)
+                setPadding(dpi(16), 0, dpi(16), 0)
+                contentDescription = "Dictate in ${l.englishName}"
+                setOnClickListener { pickLanguage(l) }
+            }
+            langButtons[l] = b
+            langSwitch.addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dpi(40)))
+        }
+        middle.addView(langSwitch)
+        row.addView(middle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(IconKey(this, p, R.drawable.ic_backspace, "Delete").apply {
             repeatWhileHeld = true
             onTap = { currentInputConnection?.deleteSurroundingText(1, 0) }
@@ -103,6 +129,7 @@ class TellWellIME : InputMethodService() {
         }
         mark.isEnabled = !refused
         mark.alpha = if (refused) 0.4f else 1f
+        showLanguages()
         // Opening TellWell means "I want to talk": start listening at once.
         if (!refused && !restarting && !busy && recorder == null) startListening()
     }
@@ -127,6 +154,34 @@ class TellWellIME : InputMethodService() {
     private fun hasMic() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun setLabel(s: String) { label.text = s }
+
+    /** The switch shows only when more than one language is ready; the chosen one is filled in. */
+    private fun showLanguages() {
+        val ready = Languages.ready(this)
+        langSwitch.visibility = if (ready.size > 1) View.VISIBLE else View.GONE
+        val active = Languages.active(this)
+        for ((l, b) in langButtons) {
+            val on = l == active
+            b.visibility = if (l in ready) View.VISIBLE else View.GONE
+            b.background = if (on) rounded(p.accent, dp(20f)) else null
+            b.setTextColor(if (on) p.accentInk else p.muted)
+            b.isSelected = on
+        }
+    }
+
+    /** Takes effect for the dictation in progress too: recognition runs when it ends. */
+    private fun pickLanguage(l: Lang) {
+        Languages.setActive(this, l)
+        showLanguages()
+        // Load the chosen language's models now, so they are likely ready when the dictation ends.
+        Engine.prepare(this, l)
+        if (recorder != null) setLabel(listeningLabel())
+    }
+
+    /** "Listening in Hindi…" when there is a choice, so a wrong one is noticed before finishing. */
+    private fun listeningLabel(): String =
+        if (Languages.ready(this).size > 1) "Listening in ${Languages.active(this).englishName}… tap to finish"
+        else "Listening… tap to finish"
 
     /** Shown while the speech model compiles; checks again every 2 s and offers "Tap to talk" when done. */
     private val preparingCheck = object : Runnable {
@@ -153,7 +208,7 @@ class TellWellIME : InputMethodService() {
         if (recorder == null) return
         val held = System.currentTimeMillis() - downAt
         // Tap while listening, or press-and-hold (push-to-talk), finishes. A short tap that started it keeps listening.
-        if (stopOnUp || held > 600) finish() else setLabel("Listening… tap to finish")
+        if (stopOnUp || held > 600) finish() else setLabel(listeningLabel())
     }
 
     private fun startListening() {
@@ -170,7 +225,7 @@ class TellWellIME : InputMethodService() {
         if (!r.start()) { setLabel("Couldn't open the mic"); return }
         recorder = r
         mark.mode = MarkView.Mode.LISTENING
-        setLabel("Listening… tap to finish")
+        setLabel(listeningLabel())
         main.postDelayed(maxListen, 120_000)
     }
 
@@ -196,7 +251,7 @@ class TellWellIME : InputMethodService() {
         mark.mode = MarkView.Mode.WRITING
         mark.invalidate()
         setLabel(if (Engine.ready) "Writing…" else "Loading, then writing…")
-        Engine.process(audio, context) { res ->
+        Engine.process(audio, context, Languages.active(this)) { res ->
             main.post {
                 busy = false
                 mark.isEnabled = true

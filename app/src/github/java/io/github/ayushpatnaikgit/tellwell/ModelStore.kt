@@ -26,7 +26,9 @@ object ModelStore {
     fun removeNpuModel(c: Context) { npuModel(c).delete(); File(npuModel(c).path + ".data").delete() }
 
     /** Text for the setup screen's privacy line. */
-    const val SOURCE_NOTE = "What you say never leaves this phone. The internet is only used once, to download the models from GitHub."
+    val SOURCE_NOTE = if (BuildConfig.MULTILINGUAL)
+        "What you say never leaves this phone. The internet is only used to download the models from GitHub."
+    else "What you say never leaves this phone. The internet is only used once, to download the models from GitHub."
 
     val busy get() = ModelDownloader.running
     fun missingBytes(c: Context): Long = ModelDownloader.missing(c).sumOf { it.size }
