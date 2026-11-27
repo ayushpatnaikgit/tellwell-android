@@ -371,16 +371,40 @@ class MainActivity : Activity() {
                 .setNegativeButton("Cancel", null)
                 .show()
             Languages.supported(this, Lang.HI) -> {
-                languageNote = null
-                // The progress notification needs this on Android 13+; the download works without it.
-                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+                // A paused download resumes with the cleanup already chosen; a new one asks which cleanup to get.
+                if (Languages.missingBytes(this, Lang.HI) < Languages.totalBytes(this, Lang.HI)) addHindi()
+                else chooseCleanup("Add Hindi", Languages.chosenCleanup(this), withSpeech = true) { k ->
+                    Languages.chooseCleanup(this, k)
+                    addHindi()
                 }
-                startForegroundService(Intent(this, LanguageDownloadService::class.java).putExtra(LanguageDownloadService.EXTRA_LANG, Lang.HI.code))
-                hindiStep.button.text = "Pause"
-                hindiStep.bodyView.text = "Starting…"
             }
         }
+    }
+
+    private fun addHindi() {
+        // The progress notification needs this on Android 13+; the download works without it.
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+        }
+        startLanguageDownload(hindiStep)
+    }
+
+    /**
+     * The Hindi cleanup choice (Tiny, Standard, Large), with each one's download size: with the speech model too when
+     * Hindi is being added ([withSpeech]).
+     */
+    private fun chooseCleanup(title: String, selected: HindiCleanup, withSpeech: Boolean, picked: (HindiCleanup) -> Unit) {
+        val all = HindiCleanup.entries
+        val speech = if (withSpeech) Languages.speechBytes() else 0L
+        val items = all.map { k ->
+            val mb = (speech + k.model.size) / 1_000_000
+            "${k.label} · ${if (withSpeech) "$mb MB in all" else "$mb MB"}\n${k.blurb}"
+        }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setSingleChoiceItems(items, all.indexOf(selected)) { d, i -> d.dismiss(); picked(all[i]) }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /** Pause or resume a cleanup download, or choose another Hindi cleanup (Tiny, Standard, Large). */
@@ -392,20 +416,12 @@ class MainActivity : Activity() {
         }
         val chosen = Languages.chosenCleanup(c)
         if (!Languages.complete(c, Lang.HI) && !Languages.cleanupFailed(c, chosen)) { startLanguageDownload(cleanupStep); return }
-        val all = HindiCleanup.entries
-        val items = all.map { k -> "${k.label} · ${k.model.size / 1_000_000} MB\n${k.blurb}" }.toTypedArray()
-        android.app.AlertDialog.Builder(c)
-            .setTitle("Hindi cleanup")
-            .setSingleChoiceItems(items, all.indexOf(chosen)) { d, i ->
-                d.dismiss()
-                val k = all[i]
-                if (k == chosen && !Languages.cleanupFailed(c, k)) return@setSingleChoiceItems
-                Languages.chooseCleanup(c, k)
-                if (Languages.complete(c, Lang.HI)) { Engine.prepare(c, Languages.active(c)); refreshLanguages() }
-                else startLanguageDownload(cleanupStep)
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        chooseCleanup("Hindi cleanup", chosen, withSpeech = false) { k ->
+            if (k == chosen && !Languages.cleanupFailed(c, k)) return@chooseCleanup
+            Languages.chooseCleanup(c, k)
+            if (Languages.complete(c, Lang.HI)) { Engine.prepare(c, Languages.active(c)); refreshLanguages() }
+            else startLanguageDownload(cleanupStep)
+        }
     }
 
     private fun startLanguageDownload(step: Step) {
@@ -450,7 +466,6 @@ class MainActivity : Activity() {
         if (!BuildConfig.MULTILINGUAL) return
         refreshCleanup()
         val l = Lang.HI
-        val mb = Languages.totalBytes(this, l) / 1_000_000
         val downloaded = Languages.downloaded(this, l)
         hindiStep.setDone(Languages.usable(this, l))
         hindiStep.button.visibility = View.VISIBLE
@@ -471,7 +486,9 @@ class MainActivity : Activity() {
             else -> {
                 val left = Languages.missingBytes(this, l)
                 hindiStep.button.text = if (left < Languages.totalBytes(this, l)) "Resume" else "Add"
-                hindiStep.bodyView.text = languageNote ?: "Speak Hindi, get Devanagari text. About ${(mb + 50) / 100 * 100} MB, once. Use Wi-Fi."
+                hindiStep.bodyView.text = languageNote ?: "Speak Hindi, get Devanagari text. You choose the cleanup size: " +
+                    "${(Languages.speechBytes() + HindiCleanup.TINY.model.size) / 1_000_000} to " +
+                    "${(Languages.speechBytes() + HindiCleanup.LARGE.model.size) / 1_000_000} MB, once. Use Wi-Fi."
             }
         }
     }

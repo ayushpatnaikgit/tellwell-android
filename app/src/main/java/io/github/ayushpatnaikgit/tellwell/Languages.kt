@@ -106,6 +106,8 @@ object Languages {
     fun complete(c: Context, lang: Lang): Boolean = Fetch.missing(dir(c), files(c, lang)).isEmpty()
     fun missingBytes(c: Context, lang: Lang): Long = Fetch.missing(dir(c), files(c, lang)).sumOf { it.size }
     fun totalBytes(c: Context, lang: Lang): Long = files(c, lang).sumOf { it.size }
+    /** Hindi speech's download, which every cleanup choice needs. */
+    fun speechBytes(): Long = SPEECH.sumOf { it.size }
     /** What removing [lang] would free. */
     fun presentBytes(c: Context, lang: Lang): Long =
         if (lang != Lang.HI) 0 else (SPEECH + HindiCleanup.entries.map { it.model }).filter { present(c, it) }.sumOf { it.size }
