@@ -1,0 +1,18 @@
+TellWell Multilingual's Hindi cleanup models were fine-tuned on transcripts derived from the following datasets.
+No audio or text from them ships in the app; each was transcribed with the app's own Hindi speech model to make
+(heard, intended) text pairs.
+
+FLEURS (Hindi), Google. Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  A. Conneau et al., "FLEURS: Few-shot Learning Evaluation of Universal Representations of Speech", 2022.
+  https://huggingface.co/datasets/google/fleurs
+
+Kathbath (Hindi, validation split), AI4Bharat. Licensed under CC BY 4.0.
+  T. Javed et al., "IndicSUPERB: A Speech Processing Universal Performance Benchmark for Indian Languages", 2022.
+  https://huggingface.co/datasets/ai4bharat/Kathbath
+
+IndicVoices (Hindi, validation split), AI4Bharat. Licensed under CC BY 4.0.
+  T. Javed et al., "IndicVoices: Towards building an Inclusive Multilingual Speech Dataset for Indian Languages", 2024.
+  https://huggingface.co/datasets/ai4bharat/IndicVoices
+
+Changes: audio was transcribed by IndicConformer and paired with the datasets' reference transcripts; fillers,
+repetitions and self-corrections were added to some transcripts by script to make training examples.

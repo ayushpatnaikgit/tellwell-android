@@ -72,6 +72,9 @@ object Engine {
     @Volatile private var cleanupOn = false
     /** Hindi speech and cleanup are loaded (Hindi is offered only when both work). */
     @Volatile private var hindiOn = false
+    /** The Hindi cleanup in memory (file path) and its prompt. */
+    private var hindiPath: String? = null
+    private var hindiPrompt = PromptHindi.GEMMA3
     /** Hindi is being loaded (after English, so English dictation is ready first). */
     @Volatile var hindiLoading = false
         private set
@@ -224,8 +227,9 @@ object Engine {
     }
 
     /**
-     * Hindi: IndicConformer (4 CPU threads, ~0.9 s for 10 s of speech on a Snapdragon 7 Gen 4) and the Hindi Gemma
-     * on the CPU (~0.8 s for a typical sentence with copy-ahead). Both must pass a self-check. Runs on the worker thread.
+     * Hindi: IndicConformer (4 CPU threads, ~0.9 s for 10 s of speech on a Snapdragon 7 Gen 4) and the Hindi cleanup
+     * on the CPU (for a typical sentence with copy-ahead: Tiny ~0.1 s, Standard ~0.35 s, Large ~0.8 s). Both must pass
+     * a self-check; a cleanup that doesn't is remembered and another one on the phone is tried. Worker thread.
      */
     private fun loadHindi(context: Context) {
         if (hindiOn || !Languages.downloaded(context, Lang.HI) || !Languages.supported(context, Lang.HI)) return
@@ -241,17 +245,16 @@ object Engine {
             }
             Os.setenv("ADSP_LIBRARY_PATH", context.applicationInfo.nativeLibraryDir, true)
             System.loadLibrary("tellwell_llm")
-            val got = LlmNative.load(HINDI_SLOT, context.applicationInfo.nativeLibraryDir, Languages.hindiCleanup(context).absolutePath,
-                PromptHindi.PREFIX, "CPU", 4)
-            // "um so tomorrow we meet at five, no, six": expected "कल छह बजे मिलते हैं।"
-            val out = if (got.isEmpty()) "" else LlmNative.complete(HINDI_SLOT, PromptHindi.suffix("उम्म तो कल पाँच बजे मिलते हैं नहीं छह बजे"), 40, 0)
-            val ok = out.contains("छह") && !out.contains("पाँच") && !out.contains("उम्म") &&
-                out.all { it == ' ' || it in '\u0900'..'\u097F' || it in ".,?!" }
-            android.util.Log.i("TellWellLLM", "Hindi self-check: ${if (ok) "passed" else "failed"}")
+            var ok = false
+            while (!ok) {
+                val k = Languages.hindiCleanup(context) ?: break
+                ok = loadHindiCleanup(context, k)
+                // Didn't load or check out on this phone: remember that, and try another cleanup that is on the phone.
+                if (!ok) Languages.setCleanupFailed(context, k, true)
+            }
             Languages.setFailed(context, Lang.HI, !ok)
             if (!ok) {
                 AsrHindi.unload()
-                LlmNative.unload(HINDI_SLOT)
                 return
             }
             hindiOn = true
@@ -260,6 +263,24 @@ object Engine {
         } finally {
             hindiLoading = false
         }
+    }
+
+    /** Loads Hindi cleanup [k] into its slot and checks it writes Hindi. Worker thread. */
+    private fun loadHindiCleanup(context: Context, k: HindiCleanup): Boolean {
+        val file = Languages.hindiCleanupFile(context, k)
+        val prompt = k.prompt
+        if (!file.isFile) return false
+        val got = LlmNative.load(HINDI_SLOT, context.applicationInfo.nativeLibraryDir, file.absolutePath, prompt.prefix, "CPU", 4)
+        // "um I'll come to the office tomorrow morning": expected "मैं कल सुबह ऑफिस आऊँगा।". A check that the model
+        // loaded and writes Hindi, not a quality bar, so every cleanup (Tiny too) passes it.
+        val out = if (got.isEmpty()) "" else LlmNative.complete(HINDI_SLOT, prompt.suffix("उम्म मैं कल सुबह ऑफिस आऊँगा"), 40, 0)
+        val ok = listOf("कल", "सुबह", "ऑफिस").all { out.contains(it) } && !out.contains("उम्म") &&
+            out.all { it == ' ' || it in '\u0900'..'\u097F' || it in ".,?!" }
+        android.util.Log.i("TellWellLLM", "Hindi self-check (${k.name}): ${if (ok) "passed" else "failed"}")
+        if (!ok) { LlmNative.unload(HINDI_SLOT); hindiPath = null; return false }
+        hindiPath = file.absolutePath
+        hindiPrompt = prompt
+        return true
     }
 
     /** Loads both models on the worker thread if needed; [done] runs on the worker thread. */
@@ -362,7 +383,15 @@ object Engine {
      */
     private fun useLanguage(context: Context, lang: Lang) {
         if (lang == Lang.HI) {
-            if (hindiOn) return
+            // Already in memory, unless the user changed which Hindi cleanup to use.
+            val want = Languages.hindiCleanup(context)?.let { Languages.hindiCleanupFile(context, it).absolutePath }
+            if (hindiOn && hindiPath == want) return
+            if (hindiOn) {
+                hindiOn = false
+                AsrHindi.unload()
+                LlmNative.unload(HINDI_SLOT)
+                hindiPath = null
+            }
             if (englishCleanupLoaded) {
                 LlmNative.unload(ENGLISH_SLOT)
                 englishCleanupLoaded = false
@@ -373,6 +402,7 @@ object Engine {
                 hindiOn = false
                 AsrHindi.unload()
                 LlmNative.unload(HINDI_SLOT)
+                hindiPath = null
             }
             if (!englishCleanupLoaded) loadEnglishCleanup(context)
         }
@@ -436,11 +466,14 @@ object Engine {
      * like what was heard nor was said elsewhere (see HindiGuard), and the same length guard as English.
      */
     private fun cleanupHindi(raw: String): String {
-        val out = HindiGuard.apply(raw, LlmNative.complete(HINDI_SLOT, PromptHindi.suffix(raw), 400, 4).trim())
+        val out = HindiGuard.apply(raw, LlmNative.complete(HINDI_SLOT, hindiPrompt.suffix(raw), 400, 4).trim())
         if (out == "EMPTY") return ""
         val rawWords = raw.split(Regex("\\s+")).size
         val outWords = out.split(Regex("\\s+")).size
         if (out.isEmpty() || outWords > rawWords * 2 + 8) return raw
+        // A long dictation that comes back under 60% of its words was cut off, not cleaned up: keep what was said.
+        // (Never fired on 769 held-out real Hindi outputs of the Standard and Large cleanups.)
+        if (rawWords >= 20 && outWords < rawWords * 0.6) return raw
         return out
     }
 

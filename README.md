@@ -140,6 +140,10 @@ also includes Qualcomm's QNN runtime (`com.qualcomm.qti:qnn-runtime`, fetched fr
 is proprietary and licensed by Qualcomm for distribution only inside an app; it is not part of this repository and
 is not covered by the MIT licence. Its notices are in `THIRD_PARTY_qnn-runtime_NOTICE.txt`. The models are downloaded, not bundled: Parakeet is
 licensed CC BY 4.0 by NVIDIA, and S1-mini is by Superwhisper under Apache 2.0 with a naming clause (see its model
-card). The optional Hindi models are IndicConformer (MIT, AI4Bharat) and Gemma 4 (Apache 2.0, Google), modified as
-described in the [hindi-v1 release](https://github.com/ayushpatnaikgit/tellwell-models/releases/tag/hindi-v1); their
-licences are in `THIRD_PARTY_IndicConformer_LICENSE` and `THIRD_PARTY_gemma-4_LICENSE`.
+card). The optional Hindi models are IndicConformer (MIT, AI4Bharat) for speech, Gemma 3 1B (Google, Gemma Terms of
+Use) for the standard cleanup and, if the user adds it, Gemma 4 E2B (Apache 2.0, Google) for the thorough cleanup,
+each modified as described in the [hindi-v1](https://github.com/ayushpatnaikgit/tellwell-models/releases/tag/hindi-v1)
+and [hindi-v2](https://github.com/ayushpatnaikgit/tellwell-models/releases/tag/hindi-v2) releases. Their licences and
+notices are in `THIRD_PARTY_IndicConformer_LICENSE`, `THIRD_PARTY_gemma-3_NOTICE.txt` and `THIRD_PARTY_gemma-4_LICENSE`.
+The Hindi cleanups were fine-tuned on transcripts derived from FLEURS, Kathbath and IndicVoices (CC BY 4.0); see
+`THIRD_PARTY_hindi_datasets_NOTICE.txt`.

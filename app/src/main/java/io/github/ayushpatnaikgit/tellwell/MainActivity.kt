@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var kbdStep: Step
     private lateinit var contactsStep: Step
     private lateinit var hindiStep: Step
+    private lateinit var cleanupStep: Step
     /** The last language download's error, shown until the next attempt. */
     private var languageNote: String? = null
     private lateinit var status: TextView
@@ -48,7 +49,8 @@ class MainActivity : Activity() {
     }
 
     /** A setup row: teal number (a check when done), title and note, and a teal text action. */
-    private inner class Step(val n: Int, title: String, body: String, action: String, onAction: () -> Unit) {
+    private inner class Step(val n: Int, title: String, body: String, action: String, private val label: String = "$n",
+                             onAction: () -> Unit) {
         val view = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -89,7 +91,7 @@ class MainActivity : Activity() {
             if (busy) button.visibility = View.GONE
         }
         fun setDone(done: Boolean) {
-            badge.text = if (done) "✓" else "$n"
+            badge.text = if (done) "✓" else label
             badge.setTextColor(if (done) p.accentInk else p.accent)
             badge.background = rounded(if (done) p.accent else p.tint, dp(15f))
             button.visibility = if (done) View.GONE else View.VISIBLE
@@ -206,10 +208,12 @@ class MainActivity : Activity() {
         // TellWell Multilingual: optional languages, each with its own speech and cleanup models, downloaded only if the
         // user adds it.
         hindiStep = Step(5, "हिंदी  Hindi", "", "Add") { hindiAction() }
+        cleanupStep = Step(0, "Hindi cleanup", "", "Change", "✎") { cleanupAction() }
         if (BuildConfig.MULTILINGUAL) {
             col.addView(text("Languages", 24f, 700, p.ink))
             gap(4)
             col.addView(hindiStep.view)
+            col.addView(cleanupStep.view)
             gap(28)
         }
 
@@ -362,7 +366,7 @@ class MainActivity : Activity() {
                 startService(Intent(this, LanguageDownloadService::class.java).setAction(LanguageDownloadService.ACTION_PAUSE))
             Languages.downloaded(this, Lang.HI) -> android.app.AlertDialog.Builder(this)
                 .setTitle("Remove Hindi?")
-                .setMessage("This deletes Hindi's models (${Languages.totalBytes(Lang.HI) / 1_000_000} MB). You can add it again later.")
+                .setMessage("This deletes Hindi's models (${Languages.presentBytes(this, Lang.HI) / 1_000_000} MB). You can add it again later.")
                 .setPositiveButton("Remove") { _, _ -> Languages.remove(this, Lang.HI); refreshLanguages() }
                 .setNegativeButton("Cancel", null)
                 .show()
@@ -379,10 +383,74 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Pause or resume a cleanup download, or choose another Hindi cleanup (Tiny, Standard, Large). */
+    private fun cleanupAction() {
+        val c = this
+        if (Languages.downloading == Lang.HI) {
+            startService(Intent(c, LanguageDownloadService::class.java).setAction(LanguageDownloadService.ACTION_PAUSE))
+            return
+        }
+        val chosen = Languages.chosenCleanup(c)
+        if (!Languages.complete(c, Lang.HI) && !Languages.cleanupFailed(c, chosen)) { startLanguageDownload(cleanupStep); return }
+        val all = HindiCleanup.entries
+        val items = all.map { k -> "${k.label} · ${k.model.size / 1_000_000} MB\n${k.blurb}" }.toTypedArray()
+        android.app.AlertDialog.Builder(c)
+            .setTitle("Hindi cleanup")
+            .setSingleChoiceItems(items, all.indexOf(chosen)) { d, i ->
+                d.dismiss()
+                val k = all[i]
+                if (k == chosen && !Languages.cleanupFailed(c, k)) return@setSingleChoiceItems
+                Languages.chooseCleanup(c, k)
+                if (Languages.complete(c, Lang.HI)) { Engine.prepare(c, Languages.active(c)); refreshLanguages() }
+                else startLanguageDownload(cleanupStep)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun startLanguageDownload(step: Step) {
+        languageNote = null
+        startForegroundService(Intent(this, LanguageDownloadService::class.java).putExtra(LanguageDownloadService.EXTRA_LANG, Lang.HI.code))
+        step.button.text = "Pause"
+        step.bodyView.text = "Starting…"
+    }
+
+    /** Download progress belongs to the cleanup row once Hindi itself is on the phone. */
+    private fun progressStep(): Step = if (Languages.downloaded(this, Lang.HI)) cleanupStep else hindiStep
+
+    private fun refreshCleanup() {
+        val c = this
+        val chosen = Languages.chosenCleanup(c)
+        val using = Languages.hindiCleanup(c)
+        cleanupStep.view.visibility =
+            if (Languages.supported(c, Lang.HI) && Languages.downloaded(c, Lang.HI)) View.VISIBLE else View.GONE
+        cleanupStep.setDone(false)
+        cleanupStep.button.visibility = View.VISIBLE
+        val left = Languages.missingBytes(c, Lang.HI)
+        when {
+            Languages.downloading == Lang.HI -> cleanupStep.button.text = "Pause"
+            Languages.cleanupFailed(c, chosen) -> {
+                cleanupStep.button.text = "Change"
+                cleanupStep.bodyView.text = "${chosen.label} couldn't load on this phone" +
+                    (using?.let { ", so Hindi uses ${it.label}." } ?: ".")
+            }
+            left > 0 -> {
+                cleanupStep.button.text = "Resume"
+                cleanupStep.bodyView.text = languageNote ?: ("${chosen.label}: paused, ${left / 1_000_000} MB to go." +
+                    (using?.let { " Hindi uses ${it.label} until then." } ?: ""))
+            }
+            else -> {
+                cleanupStep.button.text = "Change"
+                cleanupStep.bodyView.text = "${chosen.label}. ${chosen.blurb}"
+            }
+        }
+    }
+
     private fun refreshLanguages() {
         if (!BuildConfig.MULTILINGUAL) return
+        refreshCleanup()
         val l = Lang.HI
-        val mb = Languages.totalBytes(l) / 1_000_000
+        val mb = Languages.totalBytes(this, l) / 1_000_000
         val downloaded = Languages.downloaded(this, l)
         hindiStep.setDone(Languages.usable(this, l))
         hindiStep.button.visibility = View.VISIBLE
@@ -391,7 +459,7 @@ class MainActivity : Activity() {
                 hindiStep.bodyView.text = "Needs a phone with 8 GB of memory."
                 hindiStep.button.visibility = View.GONE
             }
-            Languages.downloading == l -> hindiStep.button.text = "Pause"
+            Languages.downloading == l && progressStep() == hindiStep -> hindiStep.button.text = "Pause"
             downloaded -> {
                 hindiStep.button.text = "Remove"
                 hindiStep.bodyView.text = when {
@@ -402,7 +470,7 @@ class MainActivity : Activity() {
             }
             else -> {
                 val left = Languages.missingBytes(this, l)
-                hindiStep.button.text = if (left < Languages.totalBytes(l)) "Resume" else "Add"
+                hindiStep.button.text = if (left < Languages.totalBytes(this, l)) "Resume" else "Add"
                 hindiStep.bodyView.text = languageNote ?: "Speak Hindi, get Devanagari text. About ${(mb + 50) / 100 * 100} MB, once. Use Wi-Fi."
             }
         }
@@ -414,8 +482,9 @@ class MainActivity : Activity() {
             main.post {
                 if (lang != Lang.HI || isDestroyed) return@post
                 if (!finished) {
-                    hindiStep.button.text = "Pause"
-                    hindiStep.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
+                    val step = progressStep()
+                    step.button.text = "Pause"
+                    step.bodyView.text = "Downloading… ${done / 1_000_000} of ${total / 1_000_000} MB"
                 } else {
                     languageNote = error
                     refreshLanguages()
