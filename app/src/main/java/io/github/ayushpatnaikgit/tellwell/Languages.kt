@@ -195,13 +195,13 @@ enum class HindiCleanup(val label: String, val blurb: String, val model: Fetch.M
      * in the fewest words that weren't said, but long dictations often come back cut off or looping, so the length
      * checks in Engine.cleanupHindi type them as heard.
      */
-    TINY("Tiny", "Fastest and smallest, for short messages. Cleans up the least, and leaves long dictations as spoken.",
+    TINY("Tiny", "Fastest. Light cleanup, best for short messages: long dictations are left as spoken.",
         Fetch.Model(listOf("https://github.com/ayushpatnaikgit/tellwell-models/releases/download/hindi-v2/gemma-3-270m-it-hindi2-trim-Q8_0.gguf"),
             "hindi/gemma-3-270m-it-hindi2-trim-Q8_0.gguf", 174_420_288, "23a2719016f2ba96a44a5d5824c53ea7f6c2451905dc0f5296328036d154e688"),
         PromptHindi.GEMMA3),
 
     /** Gemma 3 1B (Gemma Terms of Use), full fine-tune, Q8_0 (Q4_0 lost too much of the fine-tune): ~0.35 s. */
-    STANDARD("Standard", "Removes most fillers and repeated words. Recommended.",
+    STANDARD("Standard", "Removes most fillers and repeated words. Quick on most phones.",
         Fetch.Model(listOf("https://github.com/ayushpatnaikgit/tellwell-models/releases/download/hindi-v2/gemma-3-1b-it-hindi2full-trim-Q8_0.gguf"),
             "hindi/gemma-3-1b-it-hindi2full-trim-Q8_0.gguf", 861_795_616, "76ae8c8400a19be7c0ab7ca9f1c3e1ade6fc4906a553c986d50dd1d4e7277419"),
         PromptHindi.GEMMA3),
@@ -210,7 +210,7 @@ enum class HindiCleanup(val label: String, val blurb: String, val model: Fetch.M
      * Gemma 4 E2B (Apache 2.0), LoRA fine-tune, Q4_0: ~0.8 s and about 4 GB in memory. Same file (path, size,
      * checksum) as the first Hindi release, so phones that have it keep it.
      */
-    LARGE("Large", "Catches the most fillers and self-corrections, but slower and needs more memory.",
+    LARGE("Large", "Catches the most fillers and self-corrections. About twice as slow and needs more memory.",
         Fetch.Model(listOf("https://github.com/ayushpatnaikgit/tellwell-models/releases/download/hindi-v1/gemma-4-E2B-it-qat-hindi1-trim-Q4_0.gguf"),
             "hindi/gemma-4-E2B-it-qat-hindi1-trim-Q4_0.gguf", 1_909_617_856, "5215f4b0b59a95a38cf2787de9065ef9403b43ab31a00e80b9b071ca88fc149d"),
         PromptHindi.GEMMA4),
