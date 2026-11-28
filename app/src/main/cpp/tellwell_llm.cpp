@@ -6,6 +6,7 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -103,6 +104,10 @@ bool try_load(const std::string &path, const std::string &prefix, const std::str
     cp.n_ctx = 2048;
     cp.n_batch = 512;
     cp.n_ubatch = 512;
+    // Sequence 1 scores short texts (Hindi multi-pass choices) next to the cached prompt in sequence 0, sharing the
+    // same cache instead of splitting it.
+    cp.n_seq_max = 2;
+    cp.kv_unified = true;
     cp.n_threads = threads;
     cp.n_threads_batch = threads;
     cur->ctx = llama_init_from_model(cur->model, cp);
@@ -285,6 +290,45 @@ Java_io_github_ayushpatnaikgit_tellwell_LlmNative_complete(JNIEnv *env, jobject,
     }
     llama_batch_free(batch);
     return env->NewStringUTF(out.c_str());
+}
+
+// Log-probability of a short text under the slot's model used as a plain language model (start token, then the
+// text), in sequence 1 so the cached prompt in sequence 0 stays. For choices between a few candidate texts; nothing
+// is kept afterwards. Returns a very low value on failure.
+extern "C" JNIEXPORT jdouble JNICALL
+Java_io_github_ayushpatnaikgit_tellwell_LlmNative_score(JNIEnv *env, jobject, jint slot, jstring jtext) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    if (!select_slot(slot) || !cur->ctx) return -1e30;
+    std::vector<llama_token> t = tokenize("<bos>" + to_string(env, jtext));
+    const int n = (int) t.size();
+    if (n < 2 || n > 512 || cur->n_prefix + 1100 + n > 2048) return -1e30;
+    llama_memory_t mem = llama_get_memory(cur->ctx);
+    llama_memory_seq_rm(mem, 1, -1, -1);
+    llama_batch batch = llama_batch_init(n, 0, 1);
+    for (int i = 0; i < n; i++) {
+        batch.token[i] = t[i];
+        batch.pos[i] = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 1;
+        batch.logits[i] = i < n - 1;
+    }
+    batch.n_tokens = n;
+    double total = -1e30;
+    if (llama_decode(cur->ctx, batch) == 0) {
+        const int n_vocab = llama_vocab_n_tokens(cur->vocab);
+        total = 0;
+        for (int i = 0; i < n - 1; i++) {
+            const float *row = llama_get_logits_ith(cur->ctx, i);
+            float mx = row[0];
+            for (int v = 1; v < n_vocab; v++) mx = std::max(mx, row[v]);
+            double sum = 0;
+            for (int v = 0; v < n_vocab; v++) sum += std::exp((double) row[v] - mx);
+            total += (double) row[t[i + 1]] - mx - std::log(sum);
+        }
+    }
+    llama_batch_free(batch);
+    llama_memory_seq_rm(mem, 1, -1, -1);
+    return total;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

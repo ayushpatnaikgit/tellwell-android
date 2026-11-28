@@ -42,8 +42,16 @@ object Languages {
     private fun present(c: Context, k: HindiCleanup) = present(c, k.model)
 
     /** The Hindi cleanup the user chose (Standard unless changed). */
-    fun chosenCleanup(c: Context): HindiCleanup =
-        HindiCleanup.entries.firstOrNull { it.name == prefs(c).getString("hi-cleanup", null) } ?: HindiCleanup.STANDARD
+    /**
+     * The Hindi cleanup to have: always Tiny, run multi-pass (as good as Large on the Hindi tests, never puts in words
+     * that weren't said, a fraction of the memory). Phones with Standard or Large from an earlier version use them
+     * until Tiny is downloaded; then they are deleted.
+     */
+    fun chosenCleanup(@Suppress("UNUSED_PARAMETER") c: Context): HindiCleanup = HindiCleanup.TINY
+
+    /** Hindi is on the phone with an older cleanup and Tiny still has to be downloaded. */
+    fun needsTiny(c: Context): Boolean =
+        supported(c, Lang.HI) && downloaded(c, Lang.HI) && !present(c, HindiCleanup.TINY) && downloading == null
 
     /** What [lang] downloads: its speech model and the chosen cleanup. */
     fun files(c: Context, lang: Lang): List<Fetch.Model> =
@@ -191,11 +199,11 @@ object Languages {
  */
 enum class HindiCleanup(val label: String, val blurb: String, val model: Fetch.Model, val prompt: PromptHindi) {
     /**
-     * Gemma 3 270M (Gemma Terms of Use), LoRA fine-tune, Q8_0 (Q4_0 broke long dictations): ~0.1 s a sentence. Puts
-     * in the fewest words that weren't said, but long dictations often come back cut off or looping, so the length
-     * checks in Engine.cleanupHindi type them as heard.
+     * Gemma 3 270M (Gemma Terms of Use), LoRA fine-tune, Q8_0 (Q4_0 broke long dictations): ~0.1 s a sentence. Run
+     * multi-pass (HindiTwoPass): long dictations in pieces, every change checked, a few choices scored by the same
+     * model. On the 42 Hindi cases 40 (Large 41, Standard 34); no words put in that weren't said on FLEURS or Lahaja.
      */
-    TINY("Tiny", "Fastest. Light cleanup, best for short messages: long dictations are left as spoken.",
+    TINY("Tiny", "Smallest. Cleans long dictations in pieces and checks every change. Uses the least memory.",
         Fetch.Model(listOf("https://github.com/ayushpatnaikgit/tellwell-models/releases/download/hindi-v2/gemma-3-270m-it-hindi2-trim-Q8_0.gguf"),
             "hindi/gemma-3-270m-it-hindi2-trim-Q8_0.gguf", 174_420_288, "23a2719016f2ba96a44a5d5824c53ea7f6c2451905dc0f5296328036d154e688"),
         PromptHindi.GEMMA3),
