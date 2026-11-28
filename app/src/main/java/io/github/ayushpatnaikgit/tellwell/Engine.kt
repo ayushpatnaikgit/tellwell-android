@@ -27,6 +27,8 @@ object AsrNpu {
 object LlmNative {
     external fun load(slot: Int, libDir: String, modelPath: String, prefix: String, devices: String, threads: Int): String
     external fun complete(slot: Int, suffix: String, maxTokens: Int, draftK: Int): String
+    /** Log-probability of a short [text] under the slot's model as a plain language model (Hindi multi-pass choices). */
+    external fun score(slot: Int, text: String): Double
     external fun device(slot: Int): String
     external fun unload(slot: Int)
 }
@@ -466,6 +468,16 @@ object Engine {
      * like what was heard nor was said elsewhere (see HindiGuard), and the same length guard as English.
      */
     private fun cleanupHindi(raw: String): String {
+        // Multi-pass with the Tiny cleanup (see HindiTwoPass): pieces, gate, rules, and choices the model scores.
+        // The Standard and Large cleanups keep the single pass and the sound-alike guard they were measured with.
+        if (Languages.hindiCleanup(appContext ?: return raw) == HindiCleanup.TINY) {
+            if (HindiTwoPass.onlyFillers(raw)) return ""
+            val cleaned = HindiTwoPass.pieces(raw).joinToString(" ") { piece ->
+                val o = LlmNative.complete(HINDI_SLOT, hindiPrompt.suffix(piece), 3 * piece.split(' ').size + 40, 4).trim()
+                if (o == "EMPTY") "" else o
+            }.trim()
+            return HindiTwoPass.finish(raw, cleaned) { LlmNative.score(HINDI_SLOT, it) }
+        }
         val out = HindiGuard.apply(raw, LlmNative.complete(HINDI_SLOT, hindiPrompt.suffix(raw), 400, 4).trim())
         if (out == "EMPTY") return ""
         val rawWords = raw.split(Regex("\\s+")).size
