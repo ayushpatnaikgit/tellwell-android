@@ -22,10 +22,17 @@ object Languages {
 
     // IndicConformer Hindi large (AI4Bharat, MIT), exported with its feature computation as one audio-in CTC model.
     // How the Hindi models were made and tested: tellwell-lab/hindi (RESULTS.md).
-    private val SPEECH = listOf(
-        Fetch.Model(listOf("$RELEASE/indicconformer-hi-tokens.txt"), "hindi/indicconformer-hi-tokens.txt", 1_782, "8b806c485a120e67744443bc1bfcfff86c6c87a675752ba00a9f0de05faf07d3"),
-        Fetch.Model(listOf("$RELEASE/indicconformer-hi-ctc.onnx"), "hindi/indicconformer-hi-ctc.onnx", 483_138_372, "d2ea555b5469a7a628e5dd2404acc99dd8da6ea0bc311e9f66a7f3e1782a546e"),
-    )
+    private val TOKENS = Fetch.Model(listOf("$RELEASE/indicconformer-hi-tokens.txt"), "hindi/indicconformer-hi-tokens.txt", 1_782, "8b806c485a120e67744443bc1bfcfff86c6c87a675752ba00a9f0de05faf07d3")
+    /** The first release's full-precision model: still used on phones that have it until [SPEECH_INT8] is downloaded. */
+    private val SPEECH_FP32 = Fetch.Model(listOf("$RELEASE/indicconformer-hi-ctc.onnx"), "hindi/indicconformer-hi-ctc.onnx", 483_138_372, "d2ea555b5469a7a628e5dd2404acc99dd8da6ea0bc311e9f66a7f3e1782a546e")
+    /**
+     * The same model with its matrix weights in 8 bits (per channel; the audio front-end and convolutions stay at full
+     * precision): 483 -> 187 MB. Word errors FLEURS dev 12.59 -> 12.50%, Lahaja 14.34 -> 14.55%.
+     */
+    private val SPEECH_INT8 = Fetch.Model(listOf("https://github.com/ayushpatnaikgit/tellwell-models/releases/download/hindi-v3/indicconformer-hi-ctc-int8.onnx"),
+        "hindi/indicconformer-hi-ctc-int8.onnx", 187_347_507, "8fad1a8b0c4e35433cb99745040275e6e17964cf3c2dd9aa9275163939db96da")
+    /** What a Hindi download gets. */
+    private val SPEECH = listOf(TOKENS, SPEECH_INT8)
 
     /**
      * Hindi is offered on phones with 8 GB (Android reports about 7.5 GB of that): with Hindi speech, the cleanups keep
@@ -36,8 +43,10 @@ object Languages {
     private fun prefs(c: Context) = c.getSharedPreferences("languages", Context.MODE_PRIVATE)
     private fun dir(c: Context) = Engine.modelsDir(c.applicationContext)
 
-    fun hindiModel(c: Context) = File(dir(c), SPEECH[1].path)
-    fun hindiTokens(c: Context) = File(dir(c), SPEECH[0].path)
+    /** The Hindi speech model to load: the 8-bit one, or the first release's until it is downloaded. */
+    fun hindiModel(c: Context) = File(dir(c), (if (present(c, SPEECH_INT8)) SPEECH_INT8 else SPEECH_FP32).path)
+    fun hindiTokens(c: Context) = File(dir(c), TOKENS.path)
+    private fun speechPresent(c: Context) = present(c, TOKENS) && (present(c, SPEECH_INT8) || present(c, SPEECH_FP32))
     private fun present(c: Context, m: Fetch.Model) = Fetch.missing(dir(c), listOf(m)).isEmpty()
     private fun present(c: Context, k: HindiCleanup) = present(c, k.model)
 
@@ -49,9 +58,16 @@ object Languages {
      */
     fun chosenCleanup(@Suppress("UNUSED_PARAMETER") c: Context): HindiCleanup = HindiCleanup.TINY
 
-    /** Hindi is on the phone with an older cleanup and Tiny still has to be downloaded. */
-    fun needsTiny(c: Context): Boolean =
-        supported(c, Lang.HI) && downloaded(c, Lang.HI) && !present(c, HindiCleanup.TINY) && downloading == null
+    /** Hindi is on the phone from an earlier version and the current models (Tiny, 8-bit speech) still have to come. */
+    fun needsUpdate(c: Context): Boolean =
+        supported(c, Lang.HI) && downloaded(c, Lang.HI) && downloading == null &&
+            (!present(c, HindiCleanup.TINY) || !present(c, SPEECH_INT8))
+
+    /** Once the 8-bit speech model is here, the first release's full-precision one is deleted. */
+    fun dropOldSpeech(c: Context) {
+        if (!present(c, SPEECH_INT8)) return
+        File(dir(c), SPEECH_FP32.path).delete(); File(dir(c), SPEECH_FP32.path + ".part").delete()
+    }
 
     /** What [lang] downloads: its speech model and the chosen cleanup. */
     fun files(c: Context, lang: Lang): List<Fetch.Model> =
@@ -107,7 +123,7 @@ object Languages {
      */
     fun downloaded(c: Context, lang: Lang): Boolean = when (lang) {
         Lang.EN -> true
-        Lang.HI -> Fetch.missing(dir(c), SPEECH).isEmpty() && HindiCleanup.entries.any { present(c, it) }
+        Lang.HI -> speechPresent(c) && HindiCleanup.entries.any { present(c, it) }
     }
 
     /** Everything [lang] should have (speech and the chosen cleanup) is on the phone. */
@@ -118,7 +134,7 @@ object Languages {
     fun speechBytes(): Long = SPEECH.sumOf { it.size }
     /** What removing [lang] would free. */
     fun presentBytes(c: Context, lang: Lang): Long =
-        if (lang != Lang.HI) 0 else (SPEECH + HindiCleanup.entries.map { it.model }).filter { present(c, it) }.sumOf { it.size }
+        if (lang != Lang.HI) 0 else (SPEECH + SPEECH_FP32 + HindiCleanup.entries.map { it.model }).filter { present(c, it) }.sumOf { it.size }
 
     /** Deletes [lang]'s models, including partial downloads. English can't be removed. */
     fun remove(c: Context, lang: Lang) {
@@ -126,7 +142,7 @@ object Languages {
         Engine.unload(c, lang)
         setFailed(c, lang, false)
         HindiCleanup.entries.forEach { setCleanupFailed(c, it, false) }
-        (SPEECH + HindiCleanup.entries.map { it.model }).forEach { m ->
+        (SPEECH + SPEECH_FP32 + HindiCleanup.entries.map { it.model }).forEach { m ->
             File(dir(c), m.path).delete(); File(dir(c), m.path + ".part").delete()
         }
         prefs(c).edit().remove("hi-cleanup").apply()
@@ -178,7 +194,7 @@ object Languages {
                     base += m.size
                     progress(base, total)
                 }
-                if (lang == Lang.HI) dropOtherCleanups(c)
+                if (lang == Lang.HI) { dropOtherCleanups(c); dropOldSpeech(c) }
                 null
             } catch (e: Fetch.Cancelled) {
                 "Paused"
