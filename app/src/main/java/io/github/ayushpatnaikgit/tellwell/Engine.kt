@@ -21,6 +21,8 @@ object AsrNpu {
     external fun setContacts(names: Array<String>)
     /** The transcript, or null if recognition failed. [context]: text around the cursor, whose names are favoured. */
     external fun transcribe(samples: FloatArray, context: String): String?
+    /** Frees the English speech model while another language is in use. */
+    external fun unload()
 }
 
 /** llama.cpp bridge (see cpp/tellwell_llm.cpp). Slot 0: English cleanup (S1-mini); slot 1: Hindi (Gemma 4 E2B). */
@@ -51,8 +53,10 @@ object Engine {
     data class Result(val text: String, val asrMs: Long, val cleanupMs: Long, val raw: String)
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tellwell-engine") }
-    @Volatile var ready = false
-        private set
+    /** English speech and cleanup are loaded. */
+    @Volatile private var englishOn = false
+    /** The active language's models are loaded: dictation can start. Only that language is kept in memory. */
+    val ready: Boolean get() = englishOn || hindiOn
     @Volatile var status = "Not loaded"
         private set
     private var asr: OfflineRecognizer? = null
@@ -110,7 +114,7 @@ object Engine {
     fun upgradeToNpu(context: Context, done: () -> Unit = {}) {
         val app = context.applicationContext
         worker.execute {
-            if (ready && !asrOnNpu && tryNpu(app)) {
+            if (englishOn && !asrOnNpu && tryNpu(app)) {
                 asr?.release()
                 asr = null
                 asrNative = true
@@ -203,7 +207,7 @@ object Engine {
     }
 
     /** [lang]'s models are loaded and checked now (only the chosen language's cleanup stays in memory). */
-    fun loaded(lang: Lang): Boolean = if (lang == Lang.EN) ready else hindiOn
+    fun loaded(lang: Lang): Boolean = if (lang == Lang.EN) englishOn else hindiOn
 
     /**
      * Loads an optional language after its download (and English first, if that isn't loaded yet).
@@ -212,11 +216,11 @@ object Engine {
     fun loadLanguage(context: Context, lang: Lang, done: (Boolean) -> Unit = {}) {
         val app = context.applicationContext
         worker.execute {
-            if (!ready) load(app)
-            // Check the new language loads and passes its self-check, then keep the chosen one in memory.
-            if (ready) useLanguage(app, lang)
+            appContext = app
+            // Check the new language loads and passes its self-check, then keep the active one in memory.
+            useLanguage(app, lang)
             val ok = loaded(lang)
-            if (ready) useLanguage(app, Languages.active(app))
+            useLanguage(app, Languages.active(app))
             done(ok)
         }
     }
@@ -225,7 +229,7 @@ object Engine {
     fun unload(context: Context, lang: Lang) {
         if (lang != Lang.HI) return
         val app = context.applicationContext
-        worker.execute { if (ready) useLanguage(app, Lang.EN) }
+        worker.execute { useLanguage(app, Lang.EN) }
     }
 
     /**
@@ -289,7 +293,9 @@ object Engine {
     fun ensureLoaded(context: Context, done: (String) -> Unit = {}) {
         val app = context.applicationContext
         worker.execute {
-            if (!ready) load(app)
+            appContext = app
+            // Only the language the keyboard dictates in: Hindi users don't load English at all.
+            if (!ready) useLanguage(app, if (Languages.usable(app, Lang.HI) && Languages.active(app) == Lang.HI) Lang.HI else Lang.EN)
             done(status)
         }
     }
@@ -340,12 +346,24 @@ object Engine {
             return
         }
         loadEnglishCleanup(context)
-        ready = true
+        englishOn = true
         val speechOn = if (asrOnNpu) "speech on the NPU" else "speech on the CPU"
         status = if (cleanupOn) "Ready ($speechOn, cleanup on ${when (cleanupDevice) { "HTP0" -> "the NPU"; "GPUOpenCL" -> "the GPU"; else -> "the CPU" }})"
             else "Ready ($speechOn; cleanup isn't available on this phone)"
-        // Only the chosen language's cleanup stays in memory: Hindi needs most of an 8 GB phone's free memory.
-        if (Languages.active(context) == Lang.HI) useLanguage(context, Lang.HI)
+    }
+
+    /** Frees English speech and cleanup while Hindi is in use (Parakeet alone is ~650 MB on the CPU). */
+    private fun unloadEnglish() {
+        if (englishCleanupLoaded) {
+            LlmNative.unload(ENGLISH_SLOT)
+            englishCleanupLoaded = false
+        }
+        if (asrNative) AsrNpu.unload()
+        asr?.release()
+        asr = null
+        asrNative = false
+        asrOnNpu = false
+        englishOn = false
     }
 
     /** The English cleanup backend in use ("HTP0", "GPUOpenCL", "CPU"), or "" if none works. */
@@ -379,9 +397,9 @@ object Engine {
     private var englishCleanupLoaded = false
 
     /**
-     * Keeps only [lang]'s models in memory: Hindi frees English cleanup (English speech stays, small on the NPU);
-     * English frees Hindi. A switch costs a load (a few seconds) on the next dictation instead of being killed by
-     * Android for using too much memory. Runs on the worker thread.
+     * Keeps only [lang]'s models in memory: Hindi frees English speech and cleanup, English frees Hindi. A switch costs
+     * a load (a few seconds) on the next dictation instead of being killed by Android for using too much memory.
+     * Runs on the worker thread.
      */
     private fun useLanguage(context: Context, lang: Lang) {
         if (lang == Lang.HI) {
@@ -394,11 +412,9 @@ object Engine {
                 LlmNative.unload(HINDI_SLOT)
                 hindiPath = null
             }
-            if (englishCleanupLoaded) {
-                LlmNative.unload(ENGLISH_SLOT)
-                englishCleanupLoaded = false
-            }
+            unloadEnglish()
             loadHindi(context)
+            if (hindiOn) status = "Ready (Hindi)"
         } else {
             if (hindiOn) {
                 hindiOn = false
@@ -406,14 +422,14 @@ object Engine {
                 LlmNative.unload(HINDI_SLOT)
                 hindiPath = null
             }
-            if (!englishCleanupLoaded) loadEnglishCleanup(context)
+            if (!englishOn) load(context)
         }
     }
 
     /** Loads [lang]'s models ahead of the next dictation (the keyboard's switch calls this). */
     fun prepare(context: Context, lang: Lang) {
         val app = context.applicationContext
-        worker.execute { if (ready) useLanguage(app, lang) }
+        worker.execute { if (appContext != null) useLanguage(app, lang) }
     }
 
     /**
@@ -423,7 +439,7 @@ object Engine {
     fun process(samples: FloatArray, context: String = "", lang: Lang = Lang.EN, done: (Result) -> Unit) {
         worker.execute {
             // A dictation in the other language than the one in memory: swap first (a few seconds, once).
-            appContext?.let { if (ready) useLanguage(it, lang) }
+            appContext?.let { useLanguage(it, lang) }
             if (lang == Lang.HI) {
                 if (!hindiOn || samples.size < 1600) { done(Result("", 0, 0, "")); return@execute }
                 val t0 = System.nanoTime()
@@ -435,7 +451,7 @@ object Engine {
             }
             val recognizer = asr
             // Runs after any load queued before it, so a clip recorded during loading is still processed.
-            if (!ready || (recognizer == null && !asrNative) || samples.size < 1600) {
+            if (!englishOn || (recognizer == null && !asrNative) || samples.size < 1600) {
                 done(Result("", 0, 0, ""))
                 return@execute
             }

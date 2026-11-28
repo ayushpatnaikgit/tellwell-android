@@ -610,6 +610,16 @@ Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_loadCpu(JNIEnv* e, jobject, jstri
     return e->NewStringUTF(err.c_str());
 }
 
+// Frees the speech model (encoder, decoder, joiner) while another language is in use; load or loadCpu brings it back.
+extern "C" JNIEXPORT void JNICALL
+Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_unload(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> g(mu);
+    if (encoder) { api->ReleaseSession(encoder); encoder = nullptr; }
+    if (decoder) { api->ReleaseSession(decoder); decoder = nullptr; }
+    if (joiner) { api->ReleaseSession(joiner); joiner = nullptr; }
+    encoderOnNpu = false;
+}
+
 // The English word list for name correction. "" when loaded.
 extern "C" JNIEXPORT jstring JNICALL
 Java_io_github_ayushpatnaikgit_tellwell_AsrNpu_loadDictionary(JNIEnv* e, jobject, jstring path) {
