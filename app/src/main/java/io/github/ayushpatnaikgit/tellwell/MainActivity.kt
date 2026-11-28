@@ -268,9 +268,9 @@ class MainActivity : Activity() {
         // Play build: ask Google Play for any missing model pack straight away (after a failure, the button retries).
         if (ModelStore.AUTO_FETCH && downloadNote == null && !ModelStore.busy && ModelStore.missingBytes(this) > 0) startDownload()
         Engine.ensureLoaded(this) { main.post { refresh() } }
-        // Hindi from an earlier version (Standard or Large): get the smaller multi-pass cleanup; the old file is
-        // deleted once it is here.
-        if (Languages.needsTiny(this)) { Languages.chooseCleanup(this, HindiCleanup.TINY); startLanguageDownload(cleanupStep) }
+        // Hindi from an earlier version: get the current models (the multi-pass Tiny cleanup, the 8-bit speech
+        // model); the old files are deleted once they are here.
+        if (Languages.needsUpdate(this)) { Languages.chooseCleanup(this, HindiCleanup.TINY); startLanguageDownload(cleanupStep) }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
