@@ -21,8 +21,8 @@ android {
         applicationId = "io.github.ayushpatnaikgit.tellwell"
         minSdk = 29
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.3.9"
+        versionCode = 13
+        versionName = "0.3.10"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake { arguments += listOf("-DANDROID_STL=c++_static") }
